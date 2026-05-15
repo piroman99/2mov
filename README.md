@@ -43,12 +43,12 @@
 ```bash
 git clone https://gitflic.ru/piroman99/2mov.git
 cd 2mov
-``
+``'
 ### 2. Настройте переменные окружения
-``bash
+``'bash
 cp .env.example .env
 # Отредактируйте .env — добавьте токены ботов MAX и Telegram
-``
+``'
 ### 3. Запустите через Docker Compose
 ```bash
 
