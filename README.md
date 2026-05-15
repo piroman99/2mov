@@ -41,7 +41,7 @@
 ### 1. Клонируйте репозиторий
 
 ```bash
-git clone https://gitflic.ru/piroman99/2mov.git
+git clone https://gitflic.ru/project/piroman99/2mov.git
 cd 2mov
 ```
 ### 2. Настройте переменные окружения
