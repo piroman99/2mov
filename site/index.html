@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2MOV — райдшеринг без комиссии</title>
+    <title>2MOV — райдшеринг без комиссии в MAX и Telegram</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -20,33 +20,81 @@
             -webkit-background-clip: text;
             background-clip: text;
             color: transparent;
+            display: inline-block;
         }
-        .hero { text-align: center; padding: 4rem 1rem; }
+        .badge {
+            background: rgba(74, 144, 226, 0.2);
+            border-radius: 9999px;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            margin-left: 1rem;
+            color: #4a90e2;
+        }
+        .hero { text-align: center; padding: 3rem 1rem; }
         .hero h1 {
-            font-size: 3rem;
+            font-size: 2.5rem;
             font-weight: 700;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
             background: linear-gradient(135deg, #ffffff, #4a90e2);
             -webkit-background-clip: text;
             background-clip: text;
             color: transparent;
         }
-        .hero p { font-size: 1.25rem; color: #94a3b8; max-width: 600px; margin: 0 auto 2rem; }
+        .hero p { font-size: 1.125rem; color: #94a3b8; max-width: 600px; margin: 0 auto 1.5rem; }
+        
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 2rem 0;
+        }
         .btn {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
             padding: 0.75rem 1.5rem;
             border-radius: 9999px;
             text-decoration: none;
             font-weight: 500;
             transition: all 0.2s;
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid #334155;
+            color: #cbd5e1;
         }
-        .btn-primary { background: #4a90e2; color: white; }
-        .btn-primary:hover { background: #357abd; }
-        .principles { padding: 3rem 0; }
+        .btn-primary { background: #4a90e2; color: white; border: none; }
+        .btn-primary:hover { background: #357abd; transform: translateY(-2px); }
+        .btn:hover { border-color: #4a90e2; color: #4a90e2; transform: translateY(-2px); }
+        
+        .status {
+            background: rgba(0, 255, 0, 0.1);
+            border: 1px solid rgba(0, 255, 0, 0.3);
+            border-radius: 9999px;
+            padding: 0.25rem 1rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #00ff00;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0; transform: scale(1.5); }
+        }
+        
+        .principles { padding: 2rem 0; }
         .principles h2 { text-align: center; font-size: 1.75rem; margin-bottom: 2rem; color: white; }
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 1.5rem;
         }
         .card {
@@ -57,35 +105,57 @@
             padding: 1.5rem;
             transition: all 0.2s;
         }
-        .card:hover { border-color: #4a90e2; transform: translateY(-2px); }
+        .card:hover { border-color: #4a90e2; transform: translateY(-4px); }
         .card .emoji { font-size: 2rem; margin-bottom: 1rem; }
         .card h3 { font-size: 1.25rem; margin-bottom: 0.5rem; color: white; }
-        .card p { font-size: 0.875rem; color: #94a3b8; }
+        .card p { font-size: 0.875rem; color: #94a3b8; line-height: 1.4; }
+        
         .footer { text-align: center; padding: 2rem 0; border-top: 1px solid #1e293b; margin-top: 2rem; font-size: 0.75rem; color: #64748b; }
+        .footer a { color: #64748b; text-decoration: none; }
+        .footer a:hover { color: #4a90e2; }
+        
+        @media (max-width: 640px) {
+            .hero h1 { font-size: 1.75rem; }
+            .container { padding: 1rem; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="logo">2<span>MOV</span></div>
+        <div class="logo">2<span>MOV</span><span class="badge">Open Source</span></div>
+        
         <div class="hero">
+            <div class="status">
+    		<span class="status-dot" style="background: #e2a03f; animation: none; box-shadow: 0 0 5px #e2a03f;"></span>
+ 		<span style="color: #e2a03f;">В активной разработке</span>
+            </div>
             <h1>Райдшеринг без 30% комиссии</h1>
             <p>Связываем отправителей и курьеров напрямую. В MAX и Telegram. Без посредников. Без переплат.</p>
-            <a href="#" class="btn btn-primary">Присоединиться к списку ожидания</a>
+            
+            <div class="button-group">
+                <!-- ССЫЛКИ НА ЧАТЫ ПОДДЕРЖКИ — ЗАМЕНИТЕ НА ВАШИ РЕАЛЬНЫЕ ССЫЛКИ -->
+                <a href="https://t.me/+sqoHu2mCloFlNjcy" class="btn btn-primary">💬 Чат в Telegram</a>
+                <a href="https://max.ru/join/YaipMpUZmfNdHMHDocZu1_J-11-1Gy8MMlR9bi5tUzk" class="btn">📱 Чат в MAX</a>
+                <a href="https://gitflic.ru/project/piroman99/2mon" class="btn">🐙 Исходный код</a>
+            </div>
         </div>
+
         <div class="principles">
             <h2>Как работает 2MOV</h2>
             <div class="grid">
-                <div class="card"><div class="emoji">💰</div><h3>0–8% комиссии</h3><p>Вместо 30% у монополистов.</p></div>
-                <div class="card"><div class="emoji">⭐</div><h3>Рейтинг и отзывы</h3><p>Выбираете курьера по рейтингу.</p></div>
-                <div class="card"><div class="emoji">🔐</div><h3>Код подтверждения</h3><p>Безопасная доставка.</p></div>
-                <div class="card"><div class="emoji">📦</div><h3>Параметры груза</h3><p>Вес, габариты, хрупкость.</p></div>
-                <div class="card"><div class="emoji">💬</div><h3>MAX + Telegram</h3><p>Работает где удобно.</p></div>
-                <div class="card"><div class="emoji">🔓</div><h3>Открытый код</h3><p>Исходники на GitFlic.</p></div>
+                <div class="card"><div class="emoji">💰</div><h3>0–8% комиссии</h3><p>Вместо 30% у монополистов. Честно и прозрачно.</p></div>
+                <div class="card"><div class="emoji">⭐</div><h3>Рейтинг и отзывы</h3><p>Выбираете курьера по рейтингу. Система сама отсеивает плохих.</p></div>
+                <div class="card"><div class="emoji">🔐</div><h3>Код подтверждения</h3><p>Безопасная доставка. Груз передан — ввели код.</p></div>
+                <div class="card"><div class="emoji">📦</div><h3>Параметры груза</h3><p>Вес, габариты, хрупкость — всё учитывается в цене.</p></div>
+                <div class="card"><div class="emoji">💬</div><h3>MAX + Telegram</h3><p>Работает где удобно. Никаких приложений не нужно.</p></div>
+                <div class="card"><div class="emoji">🔓</div><h3>Открытый код</h3><p>Исходники на GitFlic. Проверьте безопасность сами.</p></div>
             </div>
         </div>
+
         <div class="footer">
-            <p>2MOV — информационный сервис. Не агрегатор, не перевозчик.</p>
-            <p>© 2026 2MOV</p>
+            <p>2MOV — информационный сервис знакомства отправителей и курьеров. Не агрегатор, не перевозчик.</p>
+            <p><a href="#">Политика конфиденциальности</a> | <a href="#">Пользовательское соглашение</a> | <a href="https://gitflic.ru/piroman99/2mov">GitFlic</a></p>
+            <p>© 2026 2MOV. Все права защищены.</p>
         </div>
     </div>
 </body>
