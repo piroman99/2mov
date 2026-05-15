@@ -16,3 +16,13 @@
 
 # Go workspace file
 go.work
+
+# MongoDB data
+data/
+*.db
+
+# Environment variables
+.env
+
+# Logs
+*.log

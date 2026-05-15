@@ -1,0 +1,20 @@
+2mov.ru {
+    # Статика (сайт-заглушка)
+    root * /app/site
+    file_server
+
+    # Webhook для бота (пока закомментирован)
+    # handle_path /webhook* {
+    #     reverse_proxy bot:8080
+    # }
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+}
+
+# Временная заглушка для IP (пока домен не привязан)
+:80 {
+    respond "2MOV бот запущен. Настройка домена в процессе." 200
+}

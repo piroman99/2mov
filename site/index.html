@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2MOV — райдшеринг без комиссии</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0a0f1e 0%, #0c1222 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .logo {
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ffffff, #4a90e2);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .hero { text-align: center; padding: 4rem 1rem; }
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(135deg, #ffffff, #4a90e2);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .hero p { font-size: 1.25rem; color: #94a3b8; max-width: 600px; margin: 0 auto 2rem; }
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: #4a90e2; color: white; }
+        .btn-primary:hover { background: #357abd; }
+        .principles { padding: 3rem 0; }
+        .principles h2 { text-align: center; font-size: 1.75rem; margin-bottom: 2rem; color: white; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        .card {
+            background: rgba(30, 41, 59, 0.5);
+            backdrop-filter: blur(10px);
+            border: 1px solid #334155;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            transition: all 0.2s;
+        }
+        .card:hover { border-color: #4a90e2; transform: translateY(-2px); }
+        .card .emoji { font-size: 2rem; margin-bottom: 1rem; }
+        .card h3 { font-size: 1.25rem; margin-bottom: 0.5rem; color: white; }
+        .card p { font-size: 0.875rem; color: #94a3b8; }
+        .footer { text-align: center; padding: 2rem 0; border-top: 1px solid #1e293b; margin-top: 2rem; font-size: 0.75rem; color: #64748b; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">2<span>MOV</span></div>
+        <div class="hero">
+            <h1>Райдшеринг без 30% комиссии</h1>
+            <p>Связываем отправителей и курьеров напрямую. В MAX и Telegram. Без посредников. Без переплат.</p>
+            <a href="#" class="btn btn-primary">Присоединиться к списку ожидания</a>
+        </div>
+        <div class="principles">
+            <h2>Как работает 2MOV</h2>
+            <div class="grid">
+                <div class="card"><div class="emoji">💰</div><h3>0–8% комиссии</h3><p>Вместо 30% у монополистов.</p></div>
+                <div class="card"><div class="emoji">⭐</div><h3>Рейтинг и отзывы</h3><p>Выбираете курьера по рейтингу.</p></div>
+                <div class="card"><div class="emoji">🔐</div><h3>Код подтверждения</h3><p>Безопасная доставка.</p></div>
+                <div class="card"><div class="emoji">📦</div><h3>Параметры груза</h3><p>Вес, габариты, хрупкость.</p></div>
+                <div class="card"><div class="emoji">💬</div><h3>MAX + Telegram</h3><p>Работает где удобно.</p></div>
+                <div class="card"><div class="emoji">🔓</div><h3>Открытый код</h3><p>Исходники на GitFlic.</p></div>
+            </div>
+        </div>
+        <div class="footer">
+            <p>2MOV — информационный сервис. Не агрегатор, не перевозчик.</p>
+            <p>© 2026 2MOV</p>
+        </div>
+    </div>
+</body>
+</html>
