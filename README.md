@@ -43,9 +43,9 @@
 ```bash
 git clone https://gitflic.ru/piroman99/2mov.git
 cd 2mov
-``'
+```
 ### 2. Настройте переменные окружения
-``'bash
+```bash
 cp .env.example .env
 # Отредактируйте .env — добавьте токены ботов MAX и Telegram
 ``'
@@ -83,11 +83,11 @@ docker-compose logs bot
 
 **Ожидаемый результат:**
 
-```
+
 🚀 2MOV бот запускается...
 ✅ Подключение к MongoDB установлено
 ⏳ Обработчики команд в разработке...
-```
+
 
 ### 4.4. Проверьте MongoDB
 
