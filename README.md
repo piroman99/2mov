@@ -48,7 +48,7 @@ cd 2mov
 ```bash
 cp .env.example .env
 # Отредактируйте .env — добавьте токены ботов MAX и Telegram
-``'
+```
 ### 3. Запустите через Docker Compose
 ```bash
 
