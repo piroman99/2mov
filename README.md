@@ -4,7 +4,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/2mov)](https://goreportcard.com/report/github.com/yourusername/2mov)
 [![GitFlic](https://img.shields.io/badge/GitFlic-Open%20Source-blue)](https://gitflic.ru/piroman99/2mov)
 
-**2MOV** — это открытая платформа для райдшеринга и курьерских услуг, работающая через ботов в **MAX** и **Telegram**.
+**2MOV** — это открытая платформа для для городской мобильности, такси и курьерских услуг, работающая через ботов в **MAX** и **Telegram**.
 
 Мы не агрегатор. Мы информационный сервис, который напрямую связывает заказчиков и исполнителей. Комиссия — **0–8%** вместо 30% у монополистов.
 
