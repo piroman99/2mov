@@ -3,10 +3,10 @@
     root * /app/site
     file_server
 
-    # Webhook для бота (пока закомментирован)
-    # handle_path /webhook* {
-    #     reverse_proxy bot:8080
-    # }
+#     Webhook для бота (пока закомментирован)
+     handle_path /webhook* {
+         reverse_proxy bot:8080
+     }
 
     header {
         X-Content-Type-Options "nosniff"
