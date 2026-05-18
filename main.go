@@ -2,6 +2,7 @@ package main
 
 import (
     "bytes"
+    "context"
     "encoding/json"
     "fmt"
     "io"
@@ -10,10 +11,53 @@ import (
     "os"
     "os/signal"
     "syscall"
+    "time"
+
+    "go.mongodb.org/mongo-driver/bson"
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// User структура для хранения в MongoDB
+type User struct {
+    ID           string    `bson:"_id,omitempty"`
+    MaxUserID    int       `bson:"max_user_id,omitempty"`
+    TelegramID   int64     `bson:"telegram_id,omitempty"`
+    FirstName    string    `bson:"first_name"`
+    LastName     string    `bson:"last_name"`
+    Username     string    `bson:"username"`
+    Role         string    `bson:"role"`         // passenger, driver, courier
+    Rating       float64   `bson:"rating"`
+    TripsCount   int       `bson:"trips_count"`
+    CreatedAt    time.Time `bson:"created_at"`
+    LastActiveAt time.Time `bson:"last_active_at"`
+}
+
+var mongoClient *mongo.Client
+var db *mongo.Database
 
 func main() {
     log.Println("🚀 2MOV бот запускается...")
+
+    // Подключение к MongoDB
+    mongoURI := os.Getenv("MONGO_URI")
+    if mongoURI == "" {
+        mongoURI = "mongodb://localhost:27017"
+    }
+
+    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
+    if err != nil {
+        log.Fatal("❌ Ошибка подключения к MongoDB:", err)
+    }
+    mongoClient = client
+    db = mongoClient.Database("2mov")
+
+    // Проверка подключения
+    err = mongoClient.Ping(context.Background(), nil)
+    if err != nil {
+        log.Fatal("❌ MongoDB не отвечает:", err)
+    }
+    log.Println("✅ Подключение к MongoDB установлено")
 
     mode := os.Getenv("MODE")
     if mode == "" {
@@ -27,12 +71,37 @@ func main() {
     }
 }
 
-func getKeys(m map[string]interface{}) []string {
-    keys := make([]string, 0, len(m))
-    for k := range m {
-        keys = append(keys, k)
+// findOrCreateUserByMaxID — поиск или создание пользователя по MaxUserID
+func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string) (*User, error) {
+    collection := db.Collection("users")
+    ctx := context.Background()
+
+    var user User
+    err := collection.FindOne(ctx, bson.M{"max_user_id": maxUserID}).Decode(&user)
+    if err == nil {
+        // Пользователь найден — обновляем last_active_at
+        update := bson.M{"$set": bson.M{"last_active_at": time.Now()}}
+        collection.UpdateOne(ctx, bson.M{"max_user_id": maxUserID}, update)
+        return &user, nil
     }
-    return keys
+
+    // Не найден — создаём нового
+    newUser := User{
+        MaxUserID:    maxUserID,
+        FirstName:    firstName,
+        LastName:     lastName,
+        Username:     username,
+        Role:         "passenger",
+        Rating:       5.0,
+        TripsCount:   0,
+        CreatedAt:    time.Now(),
+        LastActiveAt: time.Now(),
+    }
+    _, err = collection.InsertOne(ctx, newUser)
+    if err != nil {
+        return nil, err
+    }
+    return &newUser, nil
 }
 
 func runMaxBot() {
@@ -69,46 +138,56 @@ func runMaxBot() {
 
         // Извлекаем текст сообщения
         var text string
+        var maxUserID int
+        var firstName, lastName, username string
+
         if msg, ok := update["message"].(map[string]interface{}); ok {
             if body, ok := msg["body"].(map[string]interface{}); ok {
                 text, _ = body["text"].(string)
             }
-        }
-
-        // Извлекаем user_id отправителя из message.sender
-        var recipientID int
-        if msg, ok := update["message"].(map[string]interface{}); ok {
-            if senderRaw, ok := msg["sender"]; ok {
-                if sender, ok := senderRaw.(map[string]interface{}); ok {
-                    if id, ok := sender["user_id"]; ok {
-                        switch v := id.(type) {
-                        case float64:
-                            recipientID = int(v)
-                        case int:
-                            recipientID = v
-                        }
+            if sender, ok := msg["sender"].(map[string]interface{}); ok {
+                if id, ok := sender["user_id"]; ok {
+                    switch v := id.(type) {
+                    case float64:
+                        maxUserID = int(v)
+                    case int:
+                        maxUserID = v
                     }
                 }
+                firstName, _ = sender["first_name"].(string)
+                lastName, _ = sender["last_name"].(string)
+                username, _ = sender["username"].(string)
             }
         }
 
-        if text == "" || recipientID == 0 {
-            log.Printf("⚠️ Нет текста (%s) или recipient_id (%d), игнорируем", text, recipientID)
+        if text == "" || maxUserID == 0 {
+            log.Printf("⚠️ Нет текста (%s) или user_id (%d), игнорируем", text, maxUserID)
             w.WriteHeader(http.StatusOK)
             return
+        }
+
+        // Сохраняем или обновляем пользователя в БД
+        user, err := findOrCreateUserByMaxID(maxUserID, firstName, lastName, username)
+        if err != nil {
+            log.Printf("❌ Ошибка работы с БД: %v", err)
+        } else {
+            log.Printf("👤 Пользователь: %s %s (ID: %d, рейтинг: %.1f)", user.FirstName, user.LastName, user.MaxUserID, user.Rating)
         }
 
         var reply string
         switch text {
         case "/start":
-            reply = "🚕 Добро пожаловать в 2MOV!\nОтправьте /help для списка команд"
+            reply = fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help для списка команд", firstName, user.Rating)
+	case "/profile":
+	    reply = fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d\n👔 Роль: %s",
+		user.FirstName, user.LastName, user.Rating, user.TripsCount, user.Role)
         case "/help":
-            reply = "📋 Доступные команды:\n/start — начало\n/help — справка"
+            reply = "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль"
         default:
             reply = "Отправьте /help для списка команд"
         }
 
-        go sendMaxMessage(token, recipientID, reply)
+        go sendMaxMessage(token, maxUserID, reply)
         w.WriteHeader(http.StatusOK)
     })
 
