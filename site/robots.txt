@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /webhook
+Disallow: /admin
+Disallow: /api
+
+Sitemap: https://2mov.ru/sitemap.xml
