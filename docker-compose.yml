@@ -21,12 +21,29 @@ services:
       - MAX_BOT_TOKEN=${MAX_BOT_TOKEN}
       - MAX_TOKEN=${MAX_TOKEN}
       - TG_TOKEN=${TG_TOKEN}
+      - WEBHOOK_PATH=/webhook
     depends_on:
       - mongo
     networks:
       - 2mov-network
     ports:
       - "8080:8080"
+
+  bot-driver:
+    build: ./bot-driver
+    container_name: 2mov-bot-driver
+    restart: unless-stopped
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - MODE=driver
+      - MAX_BOT_TOKEN=${MAX_DRIVER_TOKEN}
+      - WEBHOOK_PATH=/webhookd
+    depends_on:
+      - mongo
+    networks:
+      - 2mov-network
+    ports:
+      - "8082:8080"
 
   caddy:
     image: caddy:2

@@ -1,4 +1,7 @@
 2mov.ru {
+    handle /webhookd* {
+        reverse_proxy bot-driver:8080
+    }
     handle /webhook* {
         reverse_proxy bot:8080
     }

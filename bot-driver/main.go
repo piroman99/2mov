@@ -18,15 +18,13 @@ import (
     "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// User структура для хранения в MongoDB
 type User struct {
     ID           string    `bson:"_id,omitempty"`
     MaxUserID    int       `bson:"max_user_id,omitempty"`
-    TelegramID   int64     `bson:"telegram_id,omitempty"`
     FirstName    string    `bson:"first_name"`
     LastName     string    `bson:"last_name"`
     Username     string    `bson:"username"`
-    Role         string    `bson:"role"`         // passenger, driver, courier
+    Role         string    `bson:"role"`
     Rating       float64   `bson:"rating"`
     TripsCount   int       `bson:"trips_count"`
     CreatedAt    time.Time `bson:"created_at"`
@@ -37,9 +35,8 @@ var mongoClient *mongo.Client
 var db *mongo.Database
 
 func main() {
-    log.Println("🚀 2MOV бот запускается...")
+    log.Println("🚀 2MOV DRIVER бот запускается...")
 
-    // Подключение к MongoDB
     mongoURI := os.Getenv("MONGO_URI")
     if mongoURI == "" {
         mongoURI = "mongodb://localhost:27017"
@@ -52,26 +49,15 @@ func main() {
     mongoClient = client
     db = mongoClient.Database("2mov")
 
-    // Проверка подключения
     err = mongoClient.Ping(context.Background(), nil)
     if err != nil {
         log.Fatal("❌ MongoDB не отвечает:", err)
     }
     log.Println("✅ Подключение к MongoDB установлено")
 
-    mode := os.Getenv("MODE")
-    if mode == "" {
-        mode = "max"
-    }
-
-    if mode == "telegram" {
-        runTelegramBot()
-    } else {
-        runMaxBot()
-    }
+    runMaxBot()
 }
 
-// findOrCreateUserByMaxID — поиск или создание пользователя по MaxUserID
 func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string) (*User, error) {
     collection := db.Collection("users")
     ctx := context.Background()
@@ -79,19 +65,17 @@ func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string
     var user User
     err := collection.FindOne(ctx, bson.M{"max_user_id": maxUserID}).Decode(&user)
     if err == nil {
-        // Пользователь найден — обновляем last_active_at
         update := bson.M{"$set": bson.M{"last_active_at": time.Now()}}
         collection.UpdateOne(ctx, bson.M{"max_user_id": maxUserID}, update)
         return &user, nil
     }
 
-    // Не найден — создаём нового
     newUser := User{
         MaxUserID:    maxUserID,
         FirstName:    firstName,
         LastName:     lastName,
         Username:     username,
-        Role:         "passenger",
+        Role:         "driver",
         Rating:       5.0,
         TripsCount:   0,
         CreatedAt:    time.Now(),
@@ -105,7 +89,7 @@ func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string
 }
 
 func runMaxBot() {
-    log.Println("🤖 Запуск MAX-бота...")
+    log.Println("🤖 Запуск DRIVER MAX-бота...")
 
     token := os.Getenv("MAX_BOT_TOKEN")
     if token == "" {
@@ -114,9 +98,9 @@ func runMaxBot() {
 
     webhookPath := os.Getenv("WEBHOOK_PATH")
     if webhookPath == "" {
-        webhookPath = "/webhook"
+       webhookPath = "/webhook"
     }
-    http.HandleFunc(webhookPath, func(w http.ResponseWriter, r *http.Request) {
+   http.HandleFunc(webhookPath, func(w http.ResponseWriter, r *http.Request) {    
         body, err := io.ReadAll(r.Body)
         if err != nil {
             log.Printf("❌ Ошибка чтения тела: %v", err)
@@ -140,7 +124,6 @@ func runMaxBot() {
             return
         }
 
-        // Извлекаем текст сообщения
         var text string
         var maxUserID int
         var firstName, lastName, username string
@@ -165,28 +148,32 @@ func runMaxBot() {
         }
 
         if text == "" || maxUserID == 0 {
-            log.Printf("⚠️ Нет текста (%s) или user_id (%d), игнорируем", text, maxUserID)
+            log.Printf("⚠️ Нет текста или user_id, игнорируем")
             w.WriteHeader(http.StatusOK)
             return
         }
 
-        // Сохраняем или обновляем пользователя в БД
         user, err := findOrCreateUserByMaxID(maxUserID, firstName, lastName, username)
         if err != nil {
             log.Printf("❌ Ошибка работы с БД: %v", err)
         } else {
-            log.Printf("👤 Пользователь: %s %s (ID: %d, рейтинг: %.1f)", user.FirstName, user.LastName, user.MaxUserID, user.Rating)
+            log.Printf("👤 Водитель: %s %s (ID: %d, рейтинг: %.1f)", user.FirstName, user.LastName, user.MaxUserID, user.Rating)
         }
 
         var reply string
         switch text {
         case "/start":
-            reply = fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help для списка команд", firstName, user.Rating)
-	case "/profile":
-	    reply = fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d\n👔 Роль: %s",
-		user.FirstName, user.LastName, user.Rating, user.TripsCount, user.Role)
+            reply = fmt.Sprintf("🚚 Добро пожаловать, %s!\nВы водитель. Рейтинг: %.1f\nОтправьте /help", firstName, user.Rating)
         case "/help":
-            reply = "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль"
+            reply = "📋 Команды:\n/start — приветствие\n/profile — профиль\n/accept — принять заказ\n/done — завершить\n/earnings — заработок"
+        case "/profile":
+            reply = fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d\n💰 Заработок: пока 0 ₽", user.FirstName, user.LastName, user.Rating, user.TripsCount)
+        case "/accept":
+            reply = "🚚 Команда в разработке. Скоро вы сможете принимать заказы."
+        case "/done":
+            reply = "✅ Команда в разработке. Скоро вы сможете завершать заказы."
+        case "/earnings":
+            reply = "💰 Команда в разработке. Скоро вы увидите свой заработок."
         default:
             reply = "Отправьте /help для списка команд"
         }
@@ -202,12 +189,12 @@ func runMaxBot() {
         }
     }()
 
-    log.Println("✅ MAX-бот готов к приёму вебхуков")
+    log.Println("✅ DRIVER MAX-бот готов к приёму вебхуков")
 
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
-    log.Println("👋 MAX-бот остановлен")
+    log.Println("👋 DRIVER MAX-бот остановлен")
 }
 
 func sendMaxMessage(token string, recipientID int, text string) {
@@ -240,13 +227,4 @@ func sendMaxMessage(token string, recipientID int, text string) {
 
     body, _ := io.ReadAll(resp.Body)
     log.Printf("📤 Ответ MAX API (status=%d): %s", resp.StatusCode, string(body))
-}
-
-func runTelegramBot() {
-    log.Println("🤖 Запуск Telegram-бота...")
-    log.Println("✅ Telegram-бот готов (заглушка)")
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
-    log.Println("👋 Telegram-бот остановлен")
 }
