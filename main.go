@@ -14,64 +14,49 @@ import (
     "time"
 
     "go.mongodb.org/mongo-driver/bson"
+    "go.mongodb.org/mongo-driver/bson/primitive"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// User структура для хранения в MongoDB
+// ========== MODELS ==========
+
 type User struct {
     ID           string    `bson:"_id,omitempty"`
     MaxUserID    int       `bson:"max_user_id,omitempty"`
-    TelegramID   int64     `bson:"telegram_id,omitempty"`
     FirstName    string    `bson:"first_name"`
     LastName     string    `bson:"last_name"`
     Username     string    `bson:"username"`
-    Role         string    `bson:"role"`         // passenger, driver, courier
+    Role         string    `bson:"role"`
     Rating       float64   `bson:"rating"`
     TripsCount   int       `bson:"trips_count"`
     CreatedAt    time.Time `bson:"created_at"`
     LastActiveAt time.Time `bson:"last_active_at"`
 }
 
+type Session struct {
+    UserID      string    `bson:"user_id"`
+    Step        string    `bson:"step"` // from, to, confirm
+    FromAddress string    `bson:"from_address"`
+    ToAddress   string    `bson:"to_address"`
+    UpdatedAt   time.Time `bson:"updated_at"`
+}
+
+type Order struct {
+    ID          string    `bson:"_id,omitempty"`
+    ClientID    string    `bson:"client_id"`
+    FromAddress string    `bson:"from_address"`
+    ToAddress   string    `bson:"to_address"`
+    Price       float64   `bson:"price"`
+    Status      string    `bson:"status"`
+    CreatedAt   time.Time `bson:"created_at"`
+}
+
+// ========== STORAGE ==========
+
 var mongoClient *mongo.Client
 var db *mongo.Database
 
-func main() {
-    log.Println("🚀 2MOV бот запускается...")
-
-    // Подключение к MongoDB
-    mongoURI := os.Getenv("MONGO_URI")
-    if mongoURI == "" {
-        mongoURI = "mongodb://localhost:27017"
-    }
-
-    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
-    if err != nil {
-        log.Fatal("❌ Ошибка подключения к MongoDB:", err)
-    }
-    mongoClient = client
-    db = mongoClient.Database("2mov")
-
-    // Проверка подключения
-    err = mongoClient.Ping(context.Background(), nil)
-    if err != nil {
-        log.Fatal("❌ MongoDB не отвечает:", err)
-    }
-    log.Println("✅ Подключение к MongoDB установлено")
-
-    mode := os.Getenv("MODE")
-    if mode == "" {
-        mode = "max"
-    }
-
-    if mode == "telegram" {
-        runTelegramBot()
-    } else {
-        runMaxBot()
-    }
-}
-
-// findOrCreateUserByMaxID — поиск или создание пользователя по MaxUserID
 func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string) (*User, error) {
     collection := db.Collection("users")
     ctx := context.Background()
@@ -79,19 +64,17 @@ func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string
     var user User
     err := collection.FindOne(ctx, bson.M{"max_user_id": maxUserID}).Decode(&user)
     if err == nil {
-        // Пользователь найден — обновляем last_active_at
         update := bson.M{"$set": bson.M{"last_active_at": time.Now()}}
         collection.UpdateOne(ctx, bson.M{"max_user_id": maxUserID}, update)
         return &user, nil
     }
 
-    // Не найден — создаём нового
     newUser := User{
         MaxUserID:    maxUserID,
         FirstName:    firstName,
         LastName:     lastName,
         Username:     username,
-        Role:         "passenger",
+        Role:         "client",
         Rating:       5.0,
         TripsCount:   0,
         CreatedAt:    time.Now(),
@@ -104,6 +87,96 @@ func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string
     return &newUser, nil
 }
 
+func saveSession(s Session) {
+    collection := db.Collection("sessions")
+    opts := options.Update().SetUpsert(true)
+    filter := bson.M{"user_id": s.UserID}
+    update := bson.M{"$set": s}
+    collection.UpdateOne(context.Background(), filter, update, opts)
+}
+
+func getSession(userID string) (Session, error) {
+    var session Session
+    collection := db.Collection("sessions")
+    err := collection.FindOne(context.Background(), bson.M{"user_id": userID}).Decode(&session)
+    return session, err
+}
+
+func deleteSession(userID string) {
+    collection := db.Collection("sessions")
+    collection.DeleteOne(context.Background(), bson.M{"user_id": userID})
+}
+
+func saveOrder(order Order) error {
+    collection := db.Collection("orders")
+    order.ID = primitive.NewObjectID().Hex()
+    order.CreatedAt = time.Now()
+    order.Status = "pending"
+    order.Price = calculatePrice(simpleDistance()) // заглушка
+    _, err := collection.InsertOne(context.Background(), order)
+    return err
+}
+
+// ========== HELPERS ==========
+
+func simpleDistance() float64 {
+    // TODO: заменить на реальное расстояние через 2GIS
+    return 5.0
+}
+
+func calculatePrice(distance float64) float64 {
+    basePrice := 200.0
+    pricePerKm := 30.0
+    return basePrice + distance*pricePerKm
+}
+
+func sendMaxMessage(token, chatID, text string) {
+    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
+
+    payload := map[string]interface{}{
+        "text": text,
+    }
+    jsonData, _ := json.Marshal(payload)
+
+    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", token)
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        log.Printf("❌ Ошибка отправки сообщения: %v", err)
+        return
+    }
+    defer resp.Body.Close()
+}
+
+// ========== MAIN ==========
+
+func main() {
+    log.Println("🚀 2MOV бот запускается...")
+
+    mongoURI := os.Getenv("MONGO_URI")
+    if mongoURI == "" {
+        mongoURI = "mongodb://localhost:27017"
+    }
+
+    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
+    if err != nil {
+        log.Fatal("❌ Ошибка подключения к MongoDB:", err)
+    }
+    mongoClient = client
+    db = mongoClient.Database("2mov")
+
+    err = mongoClient.Ping(context.Background(), nil)
+    if err != nil {
+        log.Fatal("❌ MongoDB не отвечает:", err)
+    }
+    log.Println("✅ Подключение к MongoDB установлено")
+
+    runMaxBot()
+}
+
 func runMaxBot() {
     log.Println("🤖 Запуск MAX-бота...")
 
@@ -112,11 +185,7 @@ func runMaxBot() {
         log.Fatal("❌ MAX_BOT_TOKEN не задан")
     }
 
-    webhookPath := os.Getenv("WEBHOOK_PATH")
-    if webhookPath == "" {
-        webhookPath = "/webhook"
-    }
-    http.HandleFunc(webhookPath, func(w http.ResponseWriter, r *http.Request) {
+    http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
         body, err := io.ReadAll(r.Body)
         if err != nil {
             log.Printf("❌ Ошибка чтения тела: %v", err)
@@ -140,7 +209,7 @@ func runMaxBot() {
             return
         }
 
-        // Извлекаем текст сообщения
+        // Извлекаем текст и user_id
         var text string
         var maxUserID int
         var firstName, lastName, username string
@@ -165,12 +234,11 @@ func runMaxBot() {
         }
 
         if text == "" || maxUserID == 0 {
-            log.Printf("⚠️ Нет текста (%s) или user_id (%d), игнорируем", text, maxUserID)
+            log.Printf("⚠️ Нет текста или user_id, игнорируем")
             w.WriteHeader(http.StatusOK)
             return
         }
 
-        // Сохраняем или обновляем пользователя в БД
         user, err := findOrCreateUserByMaxID(maxUserID, firstName, lastName, username)
         if err != nil {
             log.Printf("❌ Ошибка работы с БД: %v", err)
@@ -179,19 +247,69 @@ func runMaxBot() {
         }
 
         var reply string
-        switch text {
-        case "/start":
+
+        // Обработка команд
+        if text == "/start" {
             reply = fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help для списка команд", firstName, user.Rating)
-	case "/profile":
-	    reply = fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d\n👔 Роль: %s",
-		user.FirstName, user.LastName, user.Rating, user.TripsCount, user.Role)
-        case "/help":
-            reply = "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль"
-        default:
-            reply = "Отправьте /help для списка команд"
+        } else if text == "/help" {
+            reply = "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ"
+        } else if text == "/profile" {
+            reply = fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d", user.FirstName, user.LastName, user.Rating, user.TripsCount)
+        } else if text == "/order" {
+            session := Session{
+                UserID:      fmt.Sprintf("%d", maxUserID),
+                Step:        "from",
+                UpdatedAt:   time.Now(),
+            }
+            saveSession(session)
+            reply = "📍 Отправьте адрес отправления текстом (например, ул. Ленина, 10)"
+        } else {
+            // Обработка сессии (шаги заказа)
+            session, err := getSession(fmt.Sprintf("%d", maxUserID))
+            if err == nil {
+                switch session.Step {
+                case "from":
+                    session.FromAddress = text
+                    session.Step = "to"
+                    saveSession(session)
+                    reply = "📍 Отправьте адрес назначения"
+
+                case "to":
+                    session.ToAddress = text
+                    session.Step = "confirm"
+                    saveSession(session)
+
+                    distance := simpleDistance()
+                    price := calculatePrice(distance)
+
+                    reply = fmt.Sprintf(
+                        "🚚 Заказ:\nОткуда: %s\nКуда: %s\nРасстояние: %.1f км\nЦена: %.0f ₽\n\nПодтверждаете?\n1 — Да\n2 — Отмена",
+                        session.FromAddress, session.ToAddress, distance, price,
+                    )
+
+                case "confirm":
+                    if text == "1" {
+                        order := Order{
+                            ClientID:    fmt.Sprintf("%d", maxUserID),
+                            FromAddress: session.FromAddress,
+                            ToAddress:   session.ToAddress,
+                        }
+                        saveOrder(order)
+                        deleteSession(fmt.Sprintf("%d", maxUserID))
+                        reply = "✅ Заказ создан! Ищем водителя..."
+                    } else {
+                        deleteSession(fmt.Sprintf("%d", maxUserID))
+                        reply = "❌ Заказ отменён"
+                    }
+                default:
+                    reply = "Отправьте /help для списка команд"
+                }
+            } else {
+                reply = "Отправьте /help для списка команд"
+            }
         }
 
-        go sendMaxMessage(token, maxUserID, reply)
+        go sendMaxMessage(token, fmt.Sprintf("%d", maxUserID), reply)
         w.WriteHeader(http.StatusOK)
     })
 
@@ -208,45 +326,4 @@ func runMaxBot() {
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
     log.Println("👋 MAX-бот остановлен")
-}
-
-func sendMaxMessage(token string, recipientID int, text string) {
-    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%d", recipientID)
-
-    payload := map[string]interface{}{
-        "text": text,
-    }
-    jsonData, err := json.Marshal(payload)
-    if err != nil {
-        log.Printf("❌ Ошибка маршалинга JSON: %v", err)
-        return
-    }
-
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    if err != nil {
-        log.Printf("❌ Ошибка создания запроса: %v", err)
-        return
-    }
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", token)
-
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        log.Printf("❌ Ошибка отправки сообщения: %v", err)
-        return
-    }
-    defer resp.Body.Close()
-
-    body, _ := io.ReadAll(resp.Body)
-    log.Printf("📤 Ответ MAX API (status=%d): %s", resp.StatusCode, string(body))
-}
-
-func runTelegramBot() {
-    log.Println("🤖 Запуск Telegram-бота...")
-    log.Println("✅ Telegram-бот готов (заглушка)")
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
-    log.Println("👋 Telegram-бот остановлен")
 }
