@@ -7,6 +7,7 @@ import (
     "fmt"
     "io"
     "log"
+    "math"
     "net/http"
     "os"
     "os/signal"
@@ -18,8 +19,6 @@ import (
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
 )
-
-// ========== MODELS ==========
 
 type User struct {
     ID           string    `bson:"_id,omitempty"`
@@ -36,9 +35,13 @@ type User struct {
 
 type Session struct {
     UserID      string    `bson:"user_id"`
-    Step        string    `bson:"step"` // from, to, confirm
+    Step        string    `bson:"step"`
     FromAddress string    `bson:"from_address"`
+    FromLat     float64   `bson:"from_lat"`
+    FromLon     float64   `bson:"from_lon"`
     ToAddress   string    `bson:"to_address"`
+    ToLat       float64   `bson:"to_lat"`
+    ToLon       float64   `bson:"to_lon"`
     UpdatedAt   time.Time `bson:"updated_at"`
 }
 
@@ -46,13 +49,15 @@ type Order struct {
     ID          string    `bson:"_id,omitempty"`
     ClientID    string    `bson:"client_id"`
     FromAddress string    `bson:"from_address"`
+    FromLat     float64   `bson:"from_lat"`
+    FromLon     float64   `bson:"from_lon"`
     ToAddress   string    `bson:"to_address"`
+    ToLat       float64   `bson:"to_lat"`
+    ToLon       float64   `bson:"to_lon"`
     Price       float64   `bson:"price"`
     Status      string    `bson:"status"`
     CreatedAt   time.Time `bson:"created_at"`
 }
-
-// ========== STORAGE ==========
 
 var mongoClient *mongo.Client
 var db *mongo.Database
@@ -112,16 +117,23 @@ func saveOrder(order Order) error {
     order.ID = primitive.NewObjectID().Hex()
     order.CreatedAt = time.Now()
     order.Status = "pending"
-    order.Price = calculatePrice(simpleDistance()) // заглушка
+    order.Price = calculatePrice(simpleDistance(order.FromLat, order.FromLon, order.ToLat, order.ToLon))
     _, err := collection.InsertOne(context.Background(), order)
     return err
 }
 
-// ========== HELPERS ==========
-
-func simpleDistance() float64 {
-    // TODO: заменить на реальное расстояние через 2GIS
-    return 5.0
+func simpleDistance(lat1, lon1, lat2, lon2 float64) float64 {
+    if lat1 == 0 || lon1 == 0 || lat2 == 0 || lon2 == 0 {
+        return 5.0
+    }
+    const earthRadius = 6371.0
+    dLat := (lat2 - lat1) * math.Pi / 180
+    dLon := (lon2 - lon1) * math.Pi / 180
+    a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+        math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*
+            math.Sin(dLon/2)*math.Sin(dLon/2)
+    c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+    return earthRadius * c
 }
 
 func calculatePrice(distance float64) float64 {
@@ -129,6 +141,44 @@ func calculatePrice(distance float64) float64 {
     pricePerKm := 30.0
     return basePrice + distance*pricePerKm
 }
+
+
+///  location
+
+func parseLocation(update map[string]interface{}) (address string, lat, lon float64, err error) {
+    msg, ok := update["message"].(map[string]interface{})
+    if !ok {
+        return "", 0, 0, fmt.Errorf("no message")
+    }
+
+    // Координаты лежат внутри message.body.attachments
+    if body, ok := msg["body"].(map[string]interface{}); ok {
+        if attachments, ok := body["attachments"].([]interface{}); ok && len(attachments) > 0 {
+            for _, att := range attachments {
+                if attMap, ok := att.(map[string]interface{}); ok {
+                    if attMap["type"] == "location" {
+                        if latVal, ok := attMap["latitude"].(float64); ok {
+                            if lonVal, ok := attMap["longitude"].(float64); ok {
+                                log.Printf("✅ Найдены координаты: lat=%f, lon=%f", latVal, lonVal)
+                                return fmt.Sprintf("%f,%f", latVal, lonVal), latVal, lonVal, nil
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Текстовый адрес
+        if text, ok := body["text"].(string); ok && text != "" && text != "/" {
+            log.Printf("✅ Найден текстовый адрес: %s", text)
+            return text, 0, 0, nil
+        }
+    }
+
+    return "", 0, 0, fmt.Errorf("no location or address")
+}
+
+/// end of location 
 
 func sendMaxMessage(token, chatID, text string) {
     url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
@@ -150,8 +200,6 @@ func sendMaxMessage(token, chatID, text string) {
     }
     defer resp.Body.Close()
 }
-
-// ========== MAIN ==========
 
 func main() {
     log.Println("🚀 2MOV бот запускается...")
@@ -209,7 +257,6 @@ func runMaxBot() {
             return
         }
 
-        // Извлекаем текст и user_id
         var text string
         var maxUserID int
         var firstName, lastName, username string
@@ -233,7 +280,7 @@ func runMaxBot() {
             }
         }
 
-        if text == "" || maxUserID == 0 {
+        if text == "" && maxUserID == 0 {
             log.Printf("⚠️ Нет текста или user_id, игнорируем")
             w.WriteHeader(http.StatusOK)
             return
@@ -247,69 +294,106 @@ func runMaxBot() {
         }
 
         var reply string
+        userIDStr := fmt.Sprintf("%d", maxUserID)
 
-        // Обработка команд
-        if text == "/start" {
+        switch text {
+        case "/start":
             reply = fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help для списка команд", firstName, user.Rating)
-        } else if text == "/help" {
+            sendMaxMessage(token, userIDStr, reply)
+
+        case "/help":
             reply = "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ"
-        } else if text == "/profile" {
+            sendMaxMessage(token, userIDStr, reply)
+
+        case "/profile":
             reply = fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d", user.FirstName, user.LastName, user.Rating, user.TripsCount)
-        } else if text == "/order" {
+            sendMaxMessage(token, userIDStr, reply)
+
+        case "/order":
             session := Session{
-                UserID:      fmt.Sprintf("%d", maxUserID),
-                Step:        "from",
-                UpdatedAt:   time.Now(),
+                UserID:    userIDStr,
+                Step:      "from",
+                UpdatedAt: time.Now(),
             }
             saveSession(session)
-            reply = "📍 Отправьте адрес отправления текстом (например, ул. Ленина, 10)"
-        } else {
-            // Обработка сессии (шаги заказа)
-            session, err := getSession(fmt.Sprintf("%d", maxUserID))
+            reply = "📍 Отправьте точку отправления (геолокацию или адрес)"
+            sendMaxMessage(token, userIDStr, reply)
+
+        default:
+            session, err := getSession(userIDStr)
             if err == nil {
                 switch session.Step {
                 case "from":
-                    session.FromAddress = text
+                    addr, lat, lon, err := parseLocation(update)
+                    if err != nil {
+                        reply = "Не удалось определить адрес. Попробуйте ещё раз или отправьте геолокацию."
+                        sendMaxMessage(token, userIDStr, reply)
+                        break
+                    }
+                    session.FromAddress = addr
+                    session.FromLat = lat
+                    session.FromLon = lon
                     session.Step = "to"
                     saveSession(session)
-                    reply = "📍 Отправьте адрес назначения"
+                    reply = "📍 Отправьте точку назначения (геолокацию или адрес)"
+                    sendMaxMessage(token, userIDStr, reply)
 
                 case "to":
-                    session.ToAddress = text
+                    addr, lat, lon, err := parseLocation(update)
+                    if err != nil {
+                        reply = "Не удалось определить адрес. Попробуйте ещё раз."
+                        sendMaxMessage(token, userIDStr, reply)
+                        break
+                    }
+                    session.ToAddress = addr
+                    session.ToLat = lat
+                    session.ToLon = lon
                     session.Step = "confirm"
                     saveSession(session)
 
-                    distance := simpleDistance()
+                    distance := simpleDistance(session.FromLat, session.FromLon, session.ToLat, session.ToLon)
                     price := calculatePrice(distance)
 
                     reply = fmt.Sprintf(
                         "🚚 Заказ:\nОткуда: %s\nКуда: %s\nРасстояние: %.1f км\nЦена: %.0f ₽\n\nПодтверждаете?\n1 — Да\n2 — Отмена",
                         session.FromAddress, session.ToAddress, distance, price,
                     )
+                    sendMaxMessage(token, userIDStr, reply)
 
                 case "confirm":
                     if text == "1" {
                         order := Order{
-                            ClientID:    fmt.Sprintf("%d", maxUserID),
+                            ClientID:    userIDStr,
                             FromAddress: session.FromAddress,
+                            FromLat:     session.FromLat,
+                            FromLon:     session.FromLon,
                             ToAddress:   session.ToAddress,
+                            ToLat:       session.ToLat,
+                            ToLon:       session.ToLon,
                         }
                         saveOrder(order)
-                        deleteSession(fmt.Sprintf("%d", maxUserID))
+                        deleteSession(userIDStr)
                         reply = "✅ Заказ создан! Ищем водителя..."
-                    } else {
-                        deleteSession(fmt.Sprintf("%d", maxUserID))
+                        sendMaxMessage(token, userIDStr, reply)
+                    } else if text == "2" {
+                        deleteSession(userIDStr)
                         reply = "❌ Заказ отменён"
+                        sendMaxMessage(token, userIDStr, reply)
+                    } else {
+                        reply = "Отправьте 1 — Да, 2 — Отмена"
+                        sendMaxMessage(token, userIDStr, reply)
                     }
+
                 default:
                     reply = "Отправьте /help для списка команд"
+                    sendMaxMessage(token, userIDStr, reply)
                 }
             } else {
                 reply = "Отправьте /help для списка команд"
+                sendMaxMessage(token, userIDStr, reply)
             }
         }
 
-        go sendMaxMessage(token, fmt.Sprintf("%d", maxUserID), reply)
         w.WriteHeader(http.StatusOK)
     })
 
