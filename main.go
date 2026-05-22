@@ -143,7 +143,7 @@ func parseLocation(update map[string]interface{}) (address string, lat, lon floa
         return "", 0, 0, fmt.Errorf("no message")
     }
     if body, ok := msg["body"].(map[string]interface{}); ok {
-        if attachments, ok := body["attachments"].([]interface{}); ok {
+        if attachments, ok := body["attachments"].([]interface{}); ok && len(attachments) > 0 {
             for _, att := range attachments {
                 if attMap, ok := att.(map[string]interface{}); ok {
                     if attMap["type"] == "location" {
@@ -169,6 +169,53 @@ func sendMaxMessage(token, chatID, text string) {
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("Authorization", token)
     http.DefaultClient.Do(req)
+}
+
+func sendMaxMessageWithButtons(token, chatID, text string, buttons [][]map[string]interface{}) {
+    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
+    payload := map[string]interface{}{
+        "text": text,
+        "attachments": []map[string]interface{}{
+            {
+                "type": "inline_keyboard",
+                "payload": map[string]interface{}{
+                    "buttons": buttons,
+                },
+            },
+        },
+    }
+    jsonData, _ := json.Marshal(payload)
+    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", token)
+    http.DefaultClient.Do(req)
+}
+
+func sendCallbackAnswer(token, callbackID, notification, newText string, updateMessage bool) {
+    log.Printf("🔍 sendCallbackAnswer: callbackID=%s, notification=%s, newText=%s", callbackID, notification, newText)
+
+    url := fmt.Sprintf("https://platform-api.max.ru/answers?callback_id=%s", callbackID)
+    answerBody := map[string]interface{}{
+        "notification": notification,
+    }
+    if updateMessage && newText != "" {
+        answerBody["message"] = map[string]interface{}{
+            "text": newText,
+        }
+    }
+    jsonData, _ := json.Marshal(answerBody)
+    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", token)
+
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        log.Printf("❌ sendCallbackAnswer error: %v", err)
+        return
+    }
+    defer resp.Body.Close()
+    body, _ := io.ReadAll(resp.Body)
+    log.Printf("✅ sendCallbackAnswer response: status=%d, body=%s", resp.StatusCode, string(body))
 }
 
 func main() {
@@ -215,7 +262,56 @@ func runMaxBot() {
             return
         }
 
-        // Извлекаем текст и user_id
+        // ========== ОБРАБОТКА НАЖАТИЯ НА КНОПКУ ==========
+        var cb map[string]interface{}
+        var ok bool
+
+        if cb, ok = update["callback"].(map[string]interface{}); !ok {
+            cb, ok = update["message_callback"].(map[string]interface{})
+        }
+
+        if ok {
+            callbackID := cb["callback_id"].(string)
+            payload := cb["payload"].(string)
+
+            var userID string
+            if userObj, ok := cb["user"].(map[string]interface{}); ok {
+                if id, ok := userObj["user_id"]; ok {
+                    userID = fmt.Sprintf("%.0f", id)
+                }
+            }
+
+            log.Printf("🔘 Callback: userID=%s, payload=%s", userID, payload)
+
+            if payload == "confirm_order" {
+                session, err := getSession(userID)
+                if err != nil {
+                    sendCallbackAnswer(token, callbackID, "❌ Сессия устарела", "Начните заказ заново с /order", true)
+                    w.WriteHeader(http.StatusOK)
+                    return
+                }
+                order := Order{
+                    ClientID:    userID,
+                    FromAddress: session.FromAddress,
+                    FromLat:     session.FromLat,
+                    FromLon:     session.FromLon,
+                    ToAddress:   session.ToAddress,
+                    ToLat:       session.ToLat,
+                    ToLon:       session.ToLon,
+                }
+                saveOrder(order)
+                deleteSession(userID)
+                sendCallbackAnswer(token, callbackID, "✅ Заказ создан! Ищем водителя...", "✅ Заказ создан! Ищем водителя...", true)
+            } else if payload == "edit_order" {
+                deleteSession(userID)
+                sendCallbackAnswer(token, callbackID, "❌ Заказ отменён", "❌ Заказ отменён. Начните заново с /order", true)
+            }
+
+            w.WriteHeader(http.StatusOK)
+            return
+        }
+
+        // ========== ОБЫЧНАЯ ОБРАБОТКА ==========
         var text string
         var maxUserID int
         var firstName, lastName, username string
@@ -246,7 +342,6 @@ func runMaxBot() {
         user, _ := findOrCreateUserByMaxID(maxUserID, firstName, lastName, username)
         userIDStr := fmt.Sprintf("%d", maxUserID)
 
-        // Обработка команд
         switch text {
         case "/start":
             reply := fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", firstName, user.Rating)
@@ -261,6 +356,7 @@ func runMaxBot() {
             session := Session{UserID: userIDStr, Step: "from", UpdatedAt: time.Now()}
             saveSession(session)
             sendMaxMessage(token, userIDStr, "📍 Отправьте точку отправления (геолокацию или адрес)")
+
         default:
             session, err := getSession(userIDStr)
             if err != nil {
@@ -269,40 +365,48 @@ func runMaxBot() {
             }
             switch session.Step {
             case "from":
-                addr, lat, lon, _ := parseLocation(update)
-                session.FromAddress, session.FromLat, session.FromLon = addr, lat, lon
+                addr, lat, lon, err := parseLocation(update)
+                if err != nil {
+                    sendMaxMessage(token, userIDStr, "Не удалось определить адрес. Попробуйте ещё раз или отправьте геолокацию.")
+                    break
+                }
+                session.FromAddress = addr
+                session.FromLat = lat
+                session.FromLon = lon
                 session.Step = "to"
                 saveSession(session)
-                sendMaxMessage(token, userIDStr, "📍 Отправьте точку назначения")
+                sendMaxMessage(token, userIDStr, "📍 Отправьте точку назначения (геолокацию или адрес)")
+
             case "to":
-                addr, lat, lon, _ := parseLocation(update)
-                session.ToAddress, session.ToLat, session.ToLon = addr, lat, lon
+                addr, lat, lon, err := parseLocation(update)
+                if err != nil {
+                    sendMaxMessage(token, userIDStr, "Не удалось определить адрес. Попробуйте ещё раз.")
+                    break
+                }
+                session.ToAddress = addr
+                session.ToLat = lat
+                session.ToLon = lon
                 session.Step = "confirm"
                 saveSession(session)
                 distance := simpleDistance(session.FromLat, session.FromLon, session.ToLat, session.ToLon)
                 price := calculatePrice(distance)
-                reply := fmt.Sprintf("🚚 Заказ:\nОткуда: %s\nКуда: %s\nРасстояние: %.1f км\nЦена: %.0f ₽\n\nПодтверждаете?\n1 — Да\n2 — Отмена", session.FromAddress, session.ToAddress, distance, price)
-                sendMaxMessage(token, userIDStr, reply)
-            case "confirm":
-                if text == "1" {
-                    order := Order{
-                        ClientID:    userIDStr,
-                        FromAddress: session.FromAddress,
-                        FromLat:     session.FromLat,
-                        FromLon:     session.FromLon,
-                        ToAddress:   session.ToAddress,
-                        ToLat:       session.ToLat,
-                        ToLon:       session.ToLon,
-                    }
-                    saveOrder(order)
-                    deleteSession(userIDStr)
-                    sendMaxMessage(token, userIDStr, "✅ Заказ создан! Ищем водителя...")
-                } else if text == "2" {
-                    deleteSession(userIDStr)
-                    sendMaxMessage(token, userIDStr, "❌ Заказ отменён")
-                } else {
-                    sendMaxMessage(token, userIDStr, "Пожалуйста, ответьте 1 (Да) или 2 (Отмена)")
+                reply := fmt.Sprintf("🚚 Заказ:\nОткуда: %s\nКуда: %s\nРасстояние: %.1f км\nЦена: %.0f ₽\n\nПодтверждаете заказ?", session.FromAddress, session.ToAddress, distance, price)
+                buttons := [][]map[string]interface{}{
+                    {
+                        {
+                            "type": "callback",
+                            "text": "✅ Да",
+                            "payload": "confirm_order",
+                        },
+                        {
+                            "type": "callback",
+                            "text": "✏️ Изменить",
+                            "payload": "edit_order",
+                        },
+                    },
                 }
+                sendMaxMessageWithButtons(token, userIDStr, reply, buttons)
+
             default:
                 sendMaxMessage(token, userIDStr, "Отправьте /help для списка команд")
             }
