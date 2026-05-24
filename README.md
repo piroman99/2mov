@@ -30,7 +30,7 @@
 | Язык | **Go 1.21+** |
 | База данных | **MongoDB** |
 | Веб-сервер | **Caddy** (автоматический SSL) |
-| Боты | MAX (green-api) + Telegram (go-telegram-bot-api) |
+| Боты | MAX (MAX api) + Telegram (go-telegram-bot-api) |
 | Контейнеризация | **Docker + Docker Compose** |
 | Репозиторий | **GitFlic** (российский GitHub) |
 
