@@ -162,17 +162,26 @@ func parseLocation(update map[string]interface{}) (address string, lat, lon floa
     }
     return "", 0, 0, fmt.Errorf("no location")
 }
-
+//
 func sendMaxMessage(token, chatID, text string) {
+    log.Printf("📤 ОТПРАВКА: user_id=%s, text=%s", chatID, text)
     url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
     payload := map[string]interface{}{"text": text}
     jsonData, _ := json.Marshal(payload)
     req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("Authorization", token)
-    http.DefaultClient.Do(req)
-}
 
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        log.Printf("❌ Ошибка отправки: %v", err)
+        return
+    }
+    defer resp.Body.Close()
+    body, _ := io.ReadAll(resp.Body)
+    log.Printf("✅ ОТВЕТ MAX: status=%d, body=%s", resp.StatusCode, string(body))
+}
+//
 func sendMaxMessageWithButtons(token, chatID, text string, buttons [][]map[string]interface{}) {
     url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
     payload := map[string]interface{}{
@@ -235,7 +244,29 @@ func runMaxBot() {
     if token == "" {
         log.Fatal("❌ MAX_BOT_TOKEN не задан")
     }
+//подсказки
 
+// Установка подсказок команд
+go func() {
+    commands := `{"commands":[
+        {"name":"order","description":"Создать заказ на доставку"},
+        {"name":"start","description":"Регистрация и приветствие"},
+        {"name":"help","description":"Справка по командам"},
+        {"name":"profile","description":"Мой профиль (рейтинг, поездки)"}
+
+    ]}`
+    req, _ := http.NewRequest("PATCH", "https://platform-api.max.ru/me", bytes.NewBufferString(commands))
+    req.Header.Set("Authorization", token)
+    req.Header.Set("Content-Type", "application/json")
+    if resp, err := http.DefaultClient.Do(req); err == nil {
+        defer resp.Body.Close()
+        log.Printf("✅ Подсказки команд установлены (status=%d)", resp.StatusCode)
+    } else {
+        log.Printf("⚠️ Не удалось установить подсказки: %v", err)
+    }
+}()
+
+//
     http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
         body, err := io.ReadAll(r.Body)
         if err != nil {
@@ -438,37 +469,47 @@ func runMaxBot() {
 
     // ========== ФОНОВАЯ ПРОВЕРКА СООБЩЕНИЙ ==========
     go func() {
-        ticker := time.NewTicker(3 * time.Second)
-        for range ticker.C {
-            var chats []struct {
-                ClientID string `bson:"client_id"`
-            }
-            cursor, err := db.Collection("chats").Find(context.Background(), bson.M{"status": "active"})
-            if err != nil {
-                continue
-            }
-            cursor.All(context.Background(), &chats)
+       ticker := time.NewTicker(3 * time.Second)
+       for range ticker.C {
+           // Получаем активные чаты
+           var chats []struct {
+               ClientID string `bson:"client_id"`
+           }
+           cursor, err := db.Collection("chats").Find(context.Background(), bson.M{"status": "active"})
+           if err != nil {
+               log.Printf("❌ Ошибка получения чатов: %v", err)
+               continue
+           }
+           cursor.All(context.Background(), &chats)
+           /// log.Printf("🔍 Найдено активных чатов: %d", len(chats))
 
-            for _, chat := range chats {
-                var messages []bson.M
-                msgCursor, err := db.Collection("chat_messages").Find(context.Background(),
-                    bson.M{"to_user": "client_" + chat.ClientID, "status": "pending"})
-                if err != nil {
-                    continue
+           for _, chat := range chats {
+            // Проверяем сообщения для этого клиента
+               var messages []bson.M
+               msgCursor, err := db.Collection("chat_messages").Find(context.Background(),
+                   bson.M{"to_user": "client_" + chat.ClientID, "status": "pending"})
+               if err != nil {
+                   log.Printf("❌ Ошибка поиска сообщений для client_%s: %v", chat.ClientID, err)
+                   continue
+               }
+               msgCursor.All(context.Background(), &messages)
+               /// log.Printf("🔍 Для client_%s найдено сообщений: %d", chat.ClientID, len(messages))
+
+               for _, msg := range messages {
+                   text := msg["text"].(string)
+                   /// log.Printf("📤 Отправка клиенту %s: %s", chat.ClientID, text)
+                   sendMaxMessage(token, chat.ClientID, fmt.Sprintf("💬 %s", text))
+                   db.Collection("chat_messages").UpdateOne(context.Background(),
+                       bson.M{"_id": msg["_id"]},
+                       bson.M{"$set": bson.M{"status": "delivered", "delivered_at": time.Now()}})
                 }
-                msgCursor.All(context.Background(), &messages)
+           }
+       }
+   }()
 
-                for _, msg := range messages {
-                    text := msg["text"].(string)
-                    sendMaxMessage(token, chat.ClientID, fmt.Sprintf("💬 %s", text))
-                    db.Collection("chat_messages").UpdateOne(context.Background(),
-                        bson.M{"_id": msg["_id"]},
-                        bson.M{"$set": bson.M{"status": "delivered", "delivered_at": time.Now()}})
-                }
-            }
-        }
-    }()
 
+    //===============================================
+   
     log.Println("✅ MAX-бот готов к приёму вебхуков")
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
