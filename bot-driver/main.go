@@ -42,7 +42,22 @@ func main() {
     if token == "" {
         log.Fatal("MAX_BOT_TOKEN not set")
     }
+//подсказки
 
+// Установка подсказок команд
+commands := `{"commands":[
+    {"name":"start","description":"Регистрация и приветствие"},
+    {"name":"help","description":"Справка по командам"},
+    {"name":"orders","description":"Список доступных заказов"},
+    {"name":"myorders","description":"Мои активные заказы"}
+]}`
+req, _ := http.NewRequest("PATCH", "https://platform-api.max.ru/me", bytes.NewBufferString(commands))
+req.Header.Set("Authorization", token)
+req.Header.Set("Content-Type", "application/json")
+http.DefaultClient.Do(req)
+log.Println("✅ Подсказки команд установлены для водительского бота")
+
+//
     mongoURI := os.Getenv("MONGO_URI")
     if mongoURI == "" {
         mongoURI = "mongodb://localhost:27017"
@@ -376,6 +391,7 @@ func updateOrderStatus(token, orderID, status, notificationText string) {
     }
 }
 
+//===
 func completeOrder(token, driverID, orderIDHex string) {
     collection := db.Collection("orders")
     filter := bson.M{"_id": orderIDHex, "driver_id": driverID, "status": "at_delivery"}
@@ -390,24 +406,29 @@ func completeOrder(token, driverID, orderIDHex string) {
     var order Order
     collection.FindOne(context.Background(), bson.M{"_id": orderIDHex}).Decode(&order)
 
-    // Закрываем чат
-    db.Collection("chats").UpdateOne(context.Background(),
-        bson.M{"order_id": orderIDHex},
-        bson.M{"$set": bson.M{"status": "closed", "updated_at": time.Now()}})
-
-    // Уведомление клиенту
+    // Сообщение клиенту
     clientMsg := bson.M{
         "order_id":   orderIDHex,
         "from_user":  "system",
         "to_user":    "client_" + order.ClientID,
-        "text":       "✅ Заказ выполнен. Спасибо!",
+        "text":       "✅ Заказ выполнен. Спасибо за поездку!",
         "status":     "pending",
         "created_at": time.Now(),
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
+    // Закрываем чат через 15 секунд
+    go func() {
+        time.Sleep(15 * time.Second)
+        db.Collection("chats").UpdateOne(context.Background(),
+            bson.M{"order_id": orderIDHex},
+            bson.M{"$set": bson.M{"status": "closed", "updated_at": time.Now()}})
+        log.Printf("✅ Чат для заказа %s закрыт", orderIDHex[:8])
+    }()
+
     sendMessage(token, driverID, "✅ Заказ завершён! Спасибо за работу.")
 }
+//===
 
 func routeOrder(token, driverID, orderIDHex string) {
     var order Order
