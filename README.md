@@ -1,7 +1,7 @@
 # 2MOV — райдшеринг без 30% комиссии агрегатора
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitFlic](https://img.shields.io/badge/GitFlic-Open%20Source-blue)](https://gitflic.ru/piroman99/2mov)
+[![GitFlic](https://img.shields.io/badge/GitFlic-Open%20Source-blue)](https://gitflic.ru/project/piroman99/2mov)
 
 **2MOV** — это открытая платформа для для городской мобильности, такси и курьерских услуг, работающая через ботов в **MAX** и **Telegram**.
 
