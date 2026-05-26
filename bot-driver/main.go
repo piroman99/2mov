@@ -33,6 +33,8 @@ type Order struct {
     Status      string    `bson:"status"`
     DriverID    string    `bson:"driver_id,omitempty"`
     CreatedAt   time.Time `bson:"created_at"`
+    CancelledBy string    `bson:"cancelled_by,omitempty"`
+    CancelledAt time.Time `bson:"cancelled_at,omitempty"`
 }
 
 var db *mongo.Database
@@ -42,22 +44,7 @@ func main() {
     if token == "" {
         log.Fatal("MAX_BOT_TOKEN not set")
     }
-//подсказки
 
-// Установка подсказок команд
-commands := `{"commands":[
-    {"name":"start","description":"Регистрация и приветствие"},
-    {"name":"help","description":"Справка по командам"},
-    {"name":"orders","description":"Список доступных заказов"},
-    {"name":"myorders","description":"Мои активные заказы"}
-]}`
-req, _ := http.NewRequest("PATCH", "https://platform-api.max.ru/me", bytes.NewBufferString(commands))
-req.Header.Set("Authorization", token)
-req.Header.Set("Content-Type", "application/json")
-http.DefaultClient.Do(req)
-log.Println("✅ Подсказки команд установлены для водительского бота")
-
-//
     mongoURI := os.Getenv("MONGO_URI")
     if mongoURI == "" {
         mongoURI = "mongodb://localhost:27017"
@@ -68,6 +55,25 @@ log.Println("✅ Подсказки команд установлены для �
     }
     db = mongoClient.Database("2mov")
     log.Println("✅ Подключение к MongoDB установлено")
+
+    // Установка подсказок команд
+    go func() {
+        commands := `{"commands":[
+            {"name":"start","description":"Регистрация и приветствие"},
+            {"name":"help","description":"Справка по командам"},
+            {"name":"orders","description":"Список доступных заказов"},
+            {"name":"myorders","description":"Мои активные заказы"}
+        ]}`
+        req, _ := http.NewRequest("PATCH", "https://platform-api.max.ru/me", bytes.NewBufferString(commands))
+        req.Header.Set("Authorization", token)
+        req.Header.Set("Content-Type", "application/json")
+        if resp, err := http.DefaultClient.Do(req); err == nil {
+            defer resp.Body.Close()
+            log.Printf("✅ Подсказки команд установлены (status=%d)", resp.StatusCode)
+        } else {
+            log.Printf("⚠️ Не удалось установить подсказки: %v", err)
+        }
+    }()
 
     http.HandleFunc("/webhookd", func(w http.ResponseWriter, r *http.Request) {
         body, _ := io.ReadAll(r.Body)
@@ -94,6 +100,9 @@ log.Println("✅ Подсказки команд установлены для �
             case strings.HasPrefix(payload, "accept_"):
                 orderID := strings.TrimPrefix(payload, "accept_")
                 acceptOrder(token, userID, orderID)
+            case strings.HasPrefix(payload, "cancel_"):
+                orderID := strings.TrimPrefix(payload, "cancel_")
+                cancelOrderByDriver(token, userID, orderID)
             case strings.HasPrefix(payload, "pickup_"):
                 orderID := strings.TrimPrefix(payload, "pickup_")
                 updateOrderStatus(token, orderID, "at_pickup", "📍 Водитель на месте забора")
@@ -186,7 +195,7 @@ log.Println("✅ Подсказки команд установлены для �
         case "/start":
             sendMessage(token, userIDStr, "🚕 Водительский бот 2MOV готов!\n/help — список команд")
         case "/help":
-            sendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/orders — список заказов")
+            sendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/orders — список заказов\n/myorders — мои заказы")
         case "/orders":
             collection := db.Collection("orders")
             filter := bson.M{"status": "pending"}
@@ -248,6 +257,73 @@ log.Println("✅ Подсказки команд установлены для �
                         },
                     },
                 }
+                sendMessageWithButtons(token, userIDStr, reply, buttons)
+            }
+        case "/myorders":
+            collection := db.Collection("orders")
+            filter := bson.M{"driver_id": userIDStr, "$or": []bson.M{
+                {"status": "accepted"},
+                {"status": "at_pickup"},
+                {"status": "to_delivery"},
+                {"status": "at_delivery"},
+            }}
+            cursor, err := collection.Find(context.Background(), filter)
+            if err != nil {
+                sendMessage(token, userIDStr, "❌ Ошибка получения заказов")
+                break
+            }
+            var orders []Order
+            cursor.All(context.Background(), &orders)
+            if len(orders) == 0 {
+                sendMessage(token, userIDStr, "📭 Нет принятых заказов")
+                break
+            }
+            for _, o := range orders {
+                moscowTime := o.CreatedAt.Add(3 * time.Hour)
+                timeStr := moscowTime.Format("02.01 15:04")
+
+                reply := fmt.Sprintf("✅ Заказ #%s\n📅 %s\n📍 %s → %s\n💰 %.0f ₽\n📌 Статус: %s",
+                    o.ID[:8],
+                    timeStr,
+                    o.FromAddress,
+                    o.ToAddress,
+                    o.Price,
+                    o.Status,
+                )
+
+                var buttons [][]map[string]interface{}
+                switch o.Status {
+                case "accepted":
+                    buttons = [][]map[string]interface{}{
+                        {
+                            {"type": "callback", "text": "📍 Прибыл на забор", "payload": fmt.Sprintf("pickup_%s", o.ID)},
+                            {"type": "callback", "text": "❌ Отменить заказ", "payload": fmt.Sprintf("cancel_%s", o.ID)},
+                        },
+                    }
+                case "at_pickup":
+                    buttons = [][]map[string]interface{}{
+                        {
+                            {"type": "callback", "text": "🚚 Выехал на доставку", "payload": fmt.Sprintf("depart_%s", o.ID)},
+                            {"type": "callback", "text": "❌ Отменить заказ", "payload": fmt.Sprintf("cancel_%s", o.ID)},
+                        },
+                    }
+                case "to_delivery":
+                    buttons = [][]map[string]interface{}{
+                        {
+                            {"type": "callback", "text": "📍 Прибыл на доставку", "payload": fmt.Sprintf("deliver_%s", o.ID)},
+                        },
+                    }
+                case "at_delivery":
+                    buttons = [][]map[string]interface{}{
+                        {
+                            {"type": "callback", "text": "✅ Завершить", "payload": fmt.Sprintf("complete_%s", o.ID)},
+                        },
+                    }
+                }
+                // Добавляем маршрут
+                buttons = append(buttons, []map[string]interface{}{
+                    {"type": "callback", "text": "🗺️ Маршрут", "payload": fmt.Sprintf("route_%s", o.ID)},
+                })
                 sendMessageWithButtons(token, userIDStr, reply, buttons)
             }
         default:
@@ -324,12 +400,11 @@ log.Println("✅ Подсказки команд установлены для �
 
 func acceptOrder(token, driverID, orderIDHex string) {
     collection := db.Collection("orders")
-    filter := bson.M{"_id": orderIDHex, "status": "pending"}
-    update := bson.M{"$set": bson.M{"status": "accepted", "driver_id": driverID}}
-
-    result, err := collection.UpdateOne(context.Background(), filter, update)
+    result, err := collection.UpdateOne(context.Background(),
+        bson.M{"_id": orderIDHex, "status": "pending"},
+        bson.M{"$set": bson.M{"status": "accepted", "driver_id": driverID}})
     if err != nil || result.MatchedCount == 0 {
-        sendMessage(token, driverID, "❌ Не удалось принять заказ")
+        sendMessage(token, driverID, "❌ Не удалось принять заказ. Возможно, его уже взяли.")
         return
     }
 
@@ -362,6 +437,55 @@ func acceptOrder(token, driverID, orderIDHex string) {
     sendOrderStatusToDriver(token, order)
 }
 
+func cancelOrderByDriver(token, driverID, orderIDHex string) {
+    collection := db.Collection("orders")
+    var order Order
+    err := collection.FindOne(context.Background(), bson.M{"_id": orderIDHex, "driver_id": driverID}).Decode(&order)
+    if err != nil {
+        sendMessage(token, driverID, "❌ Заказ не найден")
+        return
+    }
+
+    allowedStatuses := []string{"accepted", "at_pickup"}
+    allowed := false
+    for _, s := range allowedStatuses {
+        if order.Status == s {
+            allowed = true
+            break
+        }
+    }
+    if !allowed {
+        sendMessage(token, driverID, "❌ Отмена невозможна. Заказ уже в пути или доставке.")
+        return
+    }
+
+    // Возвращаем заказ в статус pending, убираем driver_id
+    update := bson.M{"$set": bson.M{
+        "status":     "pending",
+        "driver_id":  nil,
+        "updated_at": time.Now(),
+    }}
+    collection.UpdateOne(context.Background(), bson.M{"_id": orderIDHex}, update)
+
+    // Уведомление клиенту
+    clientMsg := bson.M{
+        "order_id":   orderIDHex,
+        "from_user":  "system",
+        "to_user":    "client_" + order.ClientID,
+        "text":       "❌ Водитель отменил заказ. Заказ снова доступен для других водителей.",
+        "status":     "pending",
+        "created_at": time.Now(),
+    }
+    db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
+
+    // Закрываем чат
+    db.Collection("chats").UpdateOne(context.Background(),
+        bson.M{"order_id": orderIDHex},
+        bson.M{"$set": bson.M{"status": "closed", "updated_at": time.Now()}})
+
+    sendMessage(token, driverID, "✅ Заказ отменён и возвращён в общий список")
+}
+
 func updateOrderStatus(token, orderID, status, notificationText string) {
     collection := db.Collection("orders")
     filter := bson.M{"_id": orderID}
@@ -391,7 +515,6 @@ func updateOrderStatus(token, orderID, status, notificationText string) {
     }
 }
 
-//===
 func completeOrder(token, driverID, orderIDHex string) {
     collection := db.Collection("orders")
     filter := bson.M{"_id": orderIDHex, "driver_id": driverID, "status": "at_delivery"}
@@ -428,7 +551,6 @@ func completeOrder(token, driverID, orderIDHex string) {
 
     sendMessage(token, driverID, "✅ Заказ завершён! Спасибо за работу.")
 }
-//===
 
 func routeOrder(token, driverID, orderIDHex string) {
     var order Order
@@ -460,11 +582,17 @@ func sendOrderStatusToDriver(token string, order Order) {
     switch order.Status {
     case "accepted":
         buttons = [][]map[string]interface{}{
-            {{"type": "callback", "text": "📍 Прибыл на забор", "payload": fmt.Sprintf("pickup_%s", order.ID)}},
+            {
+                {"type": "callback", "text": "📍 Прибыл на забор", "payload": fmt.Sprintf("pickup_%s", order.ID)},
+                {"type": "callback", "text": "❌ Отменить заказ", "payload": fmt.Sprintf("cancel_%s", order.ID)},
+            },
         }
     case "at_pickup":
         buttons = [][]map[string]interface{}{
-            {{"type": "callback", "text": "🚚 Выехал на доставку", "payload": fmt.Sprintf("depart_%s", order.ID)}},
+            {
+                {"type": "callback", "text": "🚚 Выехал на доставку", "payload": fmt.Sprintf("depart_%s", order.ID)},
+                {"type": "callback", "text": "❌ Отменить заказ", "payload": fmt.Sprintf("cancel_%s", order.ID)},
+            },
         }
     case "to_delivery":
         buttons = [][]map[string]interface{}{
