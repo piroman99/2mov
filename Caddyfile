@@ -1,20 +1,11 @@
-2mov.ru {
-    # Статика (сайт-заглушка)
-    root * /app/site
-    file_server
-
-    # Webhook для бота (пока закомментирован)
-    # handle_path /webhook* {
-    #     reverse_proxy bot:8080
-    # }
-
-    header {
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
+abroad.2mov.ru {
+    # Прокси вебхуков на Telegram-бота
+    handle /webhook* {
+        reverse_proxy localhost:8080
     }
-}
-
-# Временная заглушка для IP (пока домен не привязан)
-:80 {
-    respond "2MOV бот запущен. Настройка домена в процессе." 200
+    
+    # Статика или заглушка
+    handle {
+        respond "2MOV Bot Webhook" 200
+    }
 }

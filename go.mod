@@ -2,7 +2,10 @@ module 2mov
 
 go 1.21
 
-require go.mongodb.org/mongo-driver v1.17.3
+require (
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
+	go.mongodb.org/mongo-driver v1.17.3
+)
 
 require (
 	github.com/golang/snappy v0.0.4 // indirect

@@ -1,50 +1,10 @@
 version: '3.8'
 
 services:
-  mongo:
-    image: mongo:6
-    container_name: 2mov-mongo
-    restart: unless-stopped
-    volumes:
-      - mongo_data:/data/db
-    networks:
-      - 2mov-network
-
-  bot:
+  tg-bot:
     build: .
-    container_name: 2mov-bot
+    container_name: 2mov-tg-bot
     restart: unless-stopped
-    environment:
-      - MONGO_URI=mongodb://mongo:27017
-      - MAX_TOKEN=${MAX_TOKEN}
-      - TG_TOKEN=${TG_TOKEN}
-    depends_on:
-      - mongo
-    networks:
-      - 2mov-network
-    ports:
-      - "8080:8080"
-
-  caddy:
-    image: caddy:2
-    container_name: 2mov-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - ./site:/app/site
-      - caddy_data:/data
-    depends_on:
-      - bot
-    networks:
-      - 2mov-network
-
-volumes:
-  mongo_data:
-  caddy_data:
-
-networks:
-  2mov-network:
-    driver: bridge
+    env_file:
+      - .env
+    network_mode: host

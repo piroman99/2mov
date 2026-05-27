@@ -2,46 +2,306 @@ package main
 
 import (
     "context"
-//    "fmt"
+    "encoding/json"
+    "fmt"
     "log"
+    "net/http"
     "os"
     "os/signal"
+    "strings"
     "syscall"
+    "time"
 
+    "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+    "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// Структуры данных
 type User struct {
-    ID       string `bson:"_id"`
-    Username string `bson:"username"`
-    Platform string `bson:"platform"` // "max" or "telegram"
+    ID           string    `bson:"_id,omitempty"`
+    TelegramID   string    `bson:"telegram_id"`
+    FirstName    string    `bson:"first_name"`
+    LastName     string    `bson:"last_name"`
+    Username     string    `bson:"username"`
+    Role         string    `bson:"role"`
+    Rating       float64   `bson:"rating"`
+    TripsCount   int       `bson:"trips_count"`
+    CreatedAt    time.Time `bson:"created_at"`
+    LastActiveAt time.Time `bson:"last_active_at"`
 }
 
-func main() {
-    log.Println("🚀 2MOV бот запускается...")
+type Session struct {
+    UserID      string    `bson:"user_id"`
+    Step        string    `bson:"step"`
+    FromAddress string    `bson:"from_address"`
+    FromLat     float64   `bson:"from_lat"`
+    FromLon     float64   `bson:"from_lon"`
+    ToAddress   string    `bson:"to_address"`
+    ToLat       float64   `bson:"to_lat"`
+    ToLon       float64   `bson:"to_lon"`
+    UpdatedAt   time.Time `bson:"updated_at"`
+}
 
-    // Подключение к MongoDB
+type Order struct {
+    ID          string    `bson:"_id,omitempty"`
+    ClientID    string    `bson:"client_id"`
+    FromAddress string    `bson:"from_address"`
+    FromLat     float64   `bson:"from_lat"`
+    FromLon     float64   `bson:"from_lon"`
+    ToAddress   string    `bson:"to_address"`
+    ToLat       float64   `bson:"to_lat"`
+    ToLon       float64   `bson:"to_lon"`
+    Price       float64   `bson:"price"`
+    Status      string    `bson:"status"`
+    DriverID    string    `bson:"driver_id,omitempty"`
+    CreatedAt   time.Time `bson:"created_at"`
+}
+
+var db *mongo.Database
+///===
+func main() {
+    token := os.Getenv("TG_BOT_TOKEN")
+    if token == "" {
+        log.Fatal("TG_BOT_TOKEN not set")
+    }
+
+    webhookURL := os.Getenv("WEBHOOK_URL")
+    if webhookURL == "" {
+        log.Fatal("WEBHOOK_URL not set")
+    }
+
     mongoURI := os.Getenv("MONGO_URI")
     if mongoURI == "" {
         mongoURI = "mongodb://localhost:27017"
     }
 
-    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
+    mongoClient, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
     if err != nil {
-        log.Fatal("❌ Ошибка подключения к MongoDB:", err)
+        log.Fatal("MongoDB connection error:", err)
     }
-    defer client.Disconnect(context.Background())
+    db = mongoClient.Database("2mov")
+    log.Println("✅ Connected to MongoDB")
 
-    log.Println("✅ Подключение к MongoDB установлено")
+    bot, err := tgbotapi.NewBotAPI(token)
+    if err != nil {
+        log.Fatal("Bot creation error:", err)
+    }
+    bot.Debug = true
+    log.Printf("✅ Bot authorized: @%s", bot.Self.UserName)
 
-    // TODO: здесь будет код для MAX и Telegram ботов
-    log.Println("⏳ Обработчики команд в разработке...")
+    // Устанавливаем вебхук
+    webhook, err := tgbotapi.NewWebhook(webhookURL)
+    if err != nil {
+        log.Fatal("Webhook creation error:", err)
+    }
+    _, err = bot.Request(webhook)
+    if err != nil {
+        log.Fatal("Webhook setup error:", err)
+    }
+    log.Printf("✅ Webhook set: %s", webhookURL)
 
-    // Ожидание сигнала завершения
+    // HTTP сервер для вебхуков
+    http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
+        var update tgbotapi.Update
+        if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+            log.Printf("Webhook decode error: %v", err)
+            w.WriteHeader(http.StatusBadRequest)
+            return
+        }
+        go handleUpdate(bot, &update)
+        w.WriteHeader(http.StatusOK)
+    })
+
+    go func() {
+        log.Println("🚀 Webhook server starting on :8080")
+        if err := http.ListenAndServe(":8080", nil); err != nil {
+            log.Fatalf("Server error: %v", err)
+        }
+    }()
+
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
+    log.Println("👋 Bot stopped")
+}
+//==
+func handleUpdate(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
+    if update.Message != nil {
+        handleMessage(bot, update.Message)
+    }
+    if update.CallbackQuery != nil {
+        handleCallback(bot, update.CallbackQuery)
+    }
+}
 
-    log.Println("👋 2MOV бот остановлен")
+func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+    if msg == nil || msg.From == nil {
+        return
+    }
+    userID := fmt.Sprintf("%d", msg.From.ID)
+    text := msg.Text
+
+    user := findOrCreateUser(userID, msg.From.FirstName, msg.From.LastName, msg.From.UserName)
+
+    switch text {
+    case "/start":
+        reply := fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", msg.From.FirstName, user.Rating)
+        sendMessage(bot, msg.Chat.ID, reply)
+    case "/help":
+        reply := "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ"
+        sendMessage(bot, msg.Chat.ID, reply)
+    case "/profile":
+        reply := fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d", user.FirstName, user.LastName, user.Rating, user.TripsCount)
+        sendMessage(bot, msg.Chat.ID, reply)
+    case "/order":
+        session := Session{UserID: userID, Step: "from", UpdatedAt: time.Now()}
+        saveSession(session)
+        sendMessage(bot, msg.Chat.ID, "📍 Отправьте точку отправления (адрес или геолокацию)")
+    default:
+        session, err := getSession(userID)
+        if err == nil {
+            handleOrderCreation(bot, msg, &session)
+        } else {
+            sendMessage(bot, msg.Chat.ID, "❓ Неизвестная команда. Отправьте /help")
+        }
+    }
+}
+
+func handleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
+    if query == nil || query.Data == "" {
+        return
+    }
+    userID := fmt.Sprintf("%d", query.From.ID)
+    data := query.Data
+
+    if strings.HasPrefix(data, "confirm_") {
+        session, err := getSession(userID)
+        if err == nil {
+            order := Order{
+                ClientID:    userID,
+                FromAddress: session.FromAddress,
+                FromLat:     session.FromLat,
+                FromLon:     session.FromLon,
+                ToAddress:   session.ToAddress,
+                ToLat:       session.ToLat,
+                ToLon:       session.ToLon,
+                Status:      "pending",
+                CreatedAt:   time.Now(),
+                Price:       200,
+            }
+            saveOrder(order)
+            deleteSession(userID)
+            sendMessage(bot, query.Message.Chat.ID, "✅ Заказ создан! Водитель будет найден.")
+        }
+    } else if strings.HasPrefix(data, "cancel_") {
+        deleteSession(userID)
+        sendMessage(bot, query.Message.Chat.ID, "❌ Заказ отменён")
+    }
+
+    callback := tgbotapi.NewCallback(query.ID, "✅")
+    bot.Request(callback)
+}
+
+func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *Session) {
+    switch session.Step {
+    case "from":
+        if msg.Location != nil {
+            session.FromLat = msg.Location.Latitude
+            session.FromLon = msg.Location.Longitude
+            session.FromAddress = fmt.Sprintf("%f,%f", msg.Location.Latitude, msg.Location.Longitude)
+        } else if msg.Text != "" {
+            session.FromAddress = msg.Text
+        } else {
+            sendMessage(bot, msg.Chat.ID, "❌ Отправьте адрес или геолокацию")
+            return
+        }
+        session.Step = "to"
+        saveSession(*session)
+        sendMessage(bot, msg.Chat.ID, "📍 Отправьте точку назначения (адрес или геолокацию)")
+    case "to":
+        if msg.Location != nil {
+            session.ToLat = msg.Location.Latitude
+            session.ToLon = msg.Location.Longitude
+            session.ToAddress = fmt.Sprintf("%f,%f", msg.Location.Latitude, msg.Location.Longitude)
+        } else if msg.Text != "" {
+            session.ToAddress = msg.Text
+        } else {
+            sendMessage(bot, msg.Chat.ID, "❌ Отправьте адрес или геолокацию")
+            return
+        }
+        session.Step = "confirm"
+        saveSession(*session)
+        reply := fmt.Sprintf("🚚 Заказ:\n📍 Откуда: %s\n📍 Куда: %s\n💰 Цена: 200 ₽\n\nПодтверждаете?", session.FromAddress, session.ToAddress)
+        buttons := tgbotapi.NewInlineKeyboardMarkup(
+            tgbotapi.NewInlineKeyboardRow(
+                tgbotapi.NewInlineKeyboardButtonData("✅ Да", "confirm_"+session.UserID),
+                tgbotapi.NewInlineKeyboardButtonData("✏️ Отмена", "cancel_"+session.UserID),
+            ),
+        )
+        msg := tgbotapi.NewMessage(msg.Chat.ID, reply)
+        msg.ReplyMarkup = buttons
+        bot.Send(msg)
+    default:
+        sendMessage(bot, msg.Chat.ID, "❓ Отправьте /order для нового заказа")
+    }
+}
+
+func findOrCreateUser(telegramID, firstName, lastName, username string) *User {
+    collection := db.Collection("users")
+    ctx := context.Background()
+    var user User
+    err := collection.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&user)
+    if err == nil {
+        collection.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, bson.M{"$set": bson.M{"last_active_at": time.Now()}})
+        return &user
+    }
+    newUser := User{
+        TelegramID:   telegramID,
+        FirstName:    firstName,
+        LastName:     lastName,
+        Username:     username,
+        Role:         "client",
+        Rating:       5.0,
+        TripsCount:   0,
+        CreatedAt:    time.Now(),
+        LastActiveAt: time.Now(),
+    }
+    collection.InsertOne(ctx, newUser)
+    return &newUser
+}
+
+func saveSession(session Session) {
+    collection := db.Collection("sessions")
+    opts := options.Update().SetUpsert(true)
+    filter := bson.M{"user_id": session.UserID}
+    update := bson.M{"$set": session}
+    collection.UpdateOne(context.Background(), filter, update, opts)
+}
+
+func getSession(userID string) (Session, error) {
+    var session Session
+    collection := db.Collection("sessions")
+    err := collection.FindOne(context.Background(), bson.M{"user_id": userID}).Decode(&session)
+    return session, err
+}
+
+func deleteSession(userID string) {
+    collection := db.Collection("sessions")
+    collection.DeleteOne(context.Background(), bson.M{"user_id": userID})
+}
+
+func saveOrder(order Order) error {
+    collection := db.Collection("orders")
+    order.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+    order.CreatedAt = time.Now()
+    order.Price = 200.0
+    _, err := collection.InsertOne(context.Background(), order)
+    return err
+}
+
+func sendMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
+    msg := tgbotapi.NewMessage(chatID, text)
+    bot.Send(msg)
 }
