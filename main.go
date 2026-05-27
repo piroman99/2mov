@@ -11,6 +11,8 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "sort"
+    "strconv"
     "strings"
     "syscall"
     "time"
@@ -363,6 +365,197 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
     </body>
     </html>`)
 })
+
+
+//==
+
+// Водительская админка (защищена теми же логином/паролем)
+
+http.HandleFunc("/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
+    // Авторизация
+    user, pass, ok := r.BasicAuth()
+    if !ok || user != adminUsername || pass != adminPassword {
+        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
+        w.WriteHeader(http.StatusUnauthorized)
+        w.Write([]byte("Unauthorized\n"))
+        return
+    }
+    
+    ctx := context.Background()
+    usersCollection := db.Collection("users")
+    ordersCollection := db.Collection("orders")
+    
+    // Находим всех водителей (кто когда-либо принимал заказы)
+    driverIDs, err := ordersCollection.Distinct(ctx, "driver_id", bson.M{"driver_id": bson.M{"$ne": nil}})
+    if err != nil {
+        w.WriteHeader(http.StatusInternalServerError)
+        w.Write([]byte("DB error"))
+        return
+    }
+    
+    type DriverInfo struct {
+        User          User
+        LastOrderTime time.Time
+        OrdersCount   int64
+    }
+    var drivers []DriverInfo
+    
+    for _, id := range driverIDs {
+        // Конвертируем driver_id (строка из заказа) в число для поиска в users
+        driverIDStr := fmt.Sprintf("%v", id)
+        driverIDInt, err := strconv.Atoi(driverIDStr)
+        if err != nil {
+            log.Printf("Ошибка конвертации driver_id %v: %v", id, err)
+            continue
+        }
+        
+        var driver User
+        err = usersCollection.FindOne(ctx, bson.M{"max_user_id": driverIDInt}).Decode(&driver)
+        if err != nil {
+            log.Printf("Водитель %d не найден в users: %v", driverIDInt, err)
+            continue
+        }
+        
+        // Находим последний заказ водителя
+        var lastOrder Order
+        err = ordersCollection.FindOne(ctx, bson.M{"driver_id": fmt.Sprintf("%v", id)}, options.FindOne().SetSort(bson.D{{Key: "created_at", Value: -1}})).Decode(&lastOrder)
+        lastOrderTime := time.Time{}
+        var ordersCount int64 = 0
+        if err == nil {
+            lastOrderTime = lastOrder.CreatedAt
+        }
+        
+        // Считаем количество выполненных заказов
+        ordersCount, _ = ordersCollection.CountDocuments(ctx, bson.M{
+            "driver_id": fmt.Sprintf("%v", id),
+            "status":    "completed",
+        })
+        
+        drivers = append(drivers, DriverInfo{
+            User:          driver,
+            LastOrderTime: lastOrderTime,
+            OrdersCount:   ordersCount,
+        })
+    }
+    
+    // Сортировка по последнему заказу (сначала свежие)
+    sort.Slice(drivers, func(i, j int) bool {
+        return drivers[i].LastOrderTime.After(drivers[j].LastOrderTime)
+    })
+    
+    // HTML вывод
+    w.Header().Set("Content-Type", "text/html")
+    fmt.Fprintf(w, `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>2MOV — Водители</title>
+        <meta charset="UTF-8">
+        <style>
+            body { font-family: monospace; margin: 20px; }
+            table { border-collapse: collapse; width: 100%%; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .nav { margin-bottom: 20px; }
+        </style>
+    </head>
+    <body>
+        <h1>🚕 Водители 2MOV</h1>
+        <div class="nav">
+            <a href="/admin">📦 Заказы</a> | 
+            <a href="/admin/drivers">👨‍✈️ Водители</a>
+        </div>
+        <h2>Всего водителей: %d</h2>
+        <table border="1" cellpadding="5">
+            <tr>
+                <th>ID</th>
+                <th>Имя</th>
+                <th>Рейтинг</th>
+                <th>Выполнено заказов</th>
+                <th>Последний заказ</th>
+            </tr>
+    `, len(drivers))
+    
+    for _, d := range drivers {
+        lastOrderStr := "никогда"
+        if !d.LastOrderTime.IsZero() {
+            lastOrderStr = d.LastOrderTime.Add(3 * time.Hour).Format("02.01.2006 15:04")
+        }
+        
+        fmt.Fprintf(w, `<tr>
+            <td>%d</td>
+            <td>%s %s</td>
+            <td>%.1f ⭐</td>
+            <td>%d</td>
+            <td>%s</td>
+        </tr>`, 
+            d.User.MaxUserID, 
+            d.User.FirstName, 
+            d.User.LastName, 
+            d.User.Rating, 
+            d.OrdersCount, 
+            lastOrderStr)
+    }
+    
+    fmt.Fprintf(w, `
+        </table>
+        <br>
+        <a href="/admin">← Назад к заказам</a>
+    </body>
+    </html>`)
+})
+
+// Клиентская админка (для симметрии)
+http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
+    user, pass, ok := r.BasicAuth()
+    if !ok || user != adminUsername || pass != adminPassword {
+        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
+        w.WriteHeader(http.StatusUnauthorized)
+        w.Write([]byte("Unauthorized\n"))
+        return
+    }
+    
+    usersCollection := db.Collection("users")
+    ctx := context.Background()
+    
+    filter := bson.M{"role": "client"}
+    cursor, err := usersCollection.Find(ctx, filter)
+    if err != nil {
+        w.WriteHeader(http.StatusInternalServerError)
+        return
+    }
+    defer cursor.Close(ctx)
+    
+    var clients []User
+    cursor.All(ctx, &clients)
+    
+    w.Header().Set("Content-Type", "text/html")
+    fmt.Fprintf(w, `
+    <!DOCTYPE html>
+    <html>
+    <head><title>2MOV — Клиенты</title><meta charset="UTF-8"></head>
+    <body>
+        <h1>👤 Клиенты 2MOV</h1>
+        <div><a href="/admin">📦 Заказы</a> | <a href="/admin/drivers">🚕 Водители</a></div>
+        <h2>Всего клиентов: %d</h2>
+        <table border="1" cellpadding="5">
+            <tr><th>ID</th><th>Имя</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
+    `, len(clients))
+    
+    for _, c := range clients {
+        fmt.Fprintf(w, `<tr>
+            <td>%d</td>
+            <td>%s %s</td>
+            <td>%.1f</td>
+            <td>%d</td>
+            <td>%s</td>
+        </tr>`, c.MaxUserID, c.FirstName, c.LastName, c.Rating, c.TripsCount, c.LastActiveAt.Format("02.01 15:04"))
+    }
+    
+    fmt.Fprintf(w, `</table><br><a href="/admin">← Назад</a></body></html>`)
+})
+
+
 
 //==
     http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
