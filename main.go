@@ -21,6 +21,8 @@ import (
     "go.mongodb.org/mongo-driver/mongo/options"
 )
 
+
+
 type User struct {
     ID           string    `bson:"_id,omitempty"`
     MaxUserID    int       `bson:"max_user_id,omitempty"`
@@ -65,6 +67,23 @@ type Order struct {
 
 var mongoClient *mongo.Client
 var db *mongo.Database
+
+// Добавьте эти переменные в блоке var или перед main()
+var adminUsername = os.Getenv("ADMIN_USERNAME")
+var adminPassword = os.Getenv("ADMIN_PASSWORD")
+
+// Если переменные не заданы, ставим значения по умолчанию (временные)
+func init() {
+    if adminUsername == "" {
+        adminUsername = "admin"
+    }
+    if adminPassword == "" {
+        adminPassword = "admin1230"
+    }
+}
+
+
+
 
 func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string) (*User, error) {
     collection := db.Collection("users")
@@ -272,6 +291,80 @@ func runMaxBot() {
         }
     }()
 
+// Админка
+http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+    // ЗАЩИТА
+    user, pass, ok := r.BasicAuth()
+    if !ok || user != adminUsername || pass != adminPassword {
+        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
+        w.WriteHeader(http.StatusUnauthorized)
+        w.Write([]byte("Unauthorized\n"))
+        return
+    }
+    
+    // Получаем заказы
+    ordersCollection := db.Collection("orders")
+    ordersCursor, _ := ordersCollection.Find(context.Background(), bson.M{})
+    var orders []Order
+    ordersCursor.All(context.Background(), &orders)
+
+    // Получаем пользователей
+    usersCollection := db.Collection("users")
+    usersCursor, _ := usersCollection.Find(context.Background(), bson.M{})
+    var users []User
+    usersCursor.All(context.Background(), &users)
+
+    // Рендерим HTML
+    w.Header().Set("Content-Type", "text/html")
+    fmt.Fprintf(w, `
+    <!DOCTYPE html>
+    <html>
+    <head><title>2MOV Admin</title><meta charset="UTF-8"></head>
+    <body style="font-family: monospace; font-size: 14px;">
+        <h1>2MOV Admin</h1>
+
+        <h2>Заказы (%d)</h2>
+        <table border="1" cellpadding="5" cellspacing="0">
+            <tr><th>ID</th><th>Клиент</th><th>Водитель</th><th>Откуда</th><th>Куда</th><th>Цена</th><th>Статус</th><th>Создан</th></tr>
+    `, len(orders))
+
+    for _, o := range orders {
+        fmt.Fprintf(w, `<tr>
+            <td>%s</td>
+            <td>%s</td>
+            <td>%s</td>
+            <td>%s</td>
+            <td>%s</td>
+            <td>%.0f</td>
+            <td>%s</td>
+            <td>%s</td>
+        </tr>`, o.ID[:8], o.ClientID, o.DriverID, o.FromAddress, o.ToAddress, o.Price, o.Status, o.CreatedAt.Format("02.01 15:04"))
+    }
+
+    fmt.Fprintf(w, `</table>
+
+        <h2>Пользователи (%d)</h2>
+        <table border="1" cellpadding="5" cellspacing="0">
+            <tr><th>ID</th><th>Имя</th><th>Роль</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
+    `, len(users))
+
+    for _, u := range users {
+        fmt.Fprintf(w, `<tr>
+            <td>%d</td>
+            <td>%s %s</td>
+            <td>%s</td>
+            <td>%.1f</td>
+            <td>%d</td>
+            <td>%s</td>
+        </tr>`, u.MaxUserID, u.FirstName, u.LastName, u.Role, u.Rating, u.TripsCount, u.LastActiveAt.Format("02.01 15:04"))
+    }
+
+    fmt.Fprintf(w, `</table>
+    </body>
+    </html>`)
+})
+
+//==
     http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
         body, err := io.ReadAll(r.Body)
         if err != nil {

@@ -22,6 +22,8 @@ services:
       - MAX_TOKEN=${MAX_TOKEN}
       - TG_TOKEN=${TG_TOKEN}
       - WEBHOOK_PATH=/webhook
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     depends_on:
       - mongo
     networks:
