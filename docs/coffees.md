@@ -6,12 +6,12 @@
 
 **Решение:** В `bot-driver/main.go` в функции `completeOrder` добавлена горутина, которая закрывает чат через 15 секунд:
 
-%%%
+```
 go func() {
     time.Sleep(15 * time.Second)
     db.Collection("chats").UpdateOne(...)
 }()
-%%%
+```
 
 **Почему не зависает бот:** `go func()` запускает код в отдельной горутине, основной поток продолжает работу.
 
@@ -25,12 +25,12 @@ go func() {
 
 **Решение:** Клиентский и водительский боты раз в 3 секунды проверяют БД на наличие новых сообщений для своих пользователей.
 
-%%%
+```
 ticker := time.NewTicker(3 * time.Second)
 for range ticker.C {
     // проверка БД
 }
-%%%
+```
 
 **Почему 3 секунды:** Баланс между задержкой доставки и нагрузкой на БД.
 
@@ -54,10 +54,10 @@ for range ticker.C {
 
 **Решение:** В обработчике callback обязательно отправляется `POST /answers`:
 
-%%%
+```
 answerURL := fmt.Sprintf("https://platform-api.max.ru/answers?callback_id=%s", callbackID)
 answerBody := map[string]interface{}{"notification": "✅"}
-%%%
+```
 
 **Планируемое улучшение:** Отправлять более информативные уведомления.
 
