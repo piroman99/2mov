@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
     "syscall"
     "time"
 
+    "github.com/eclipse/paho.mqtt.golang"
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
@@ -38,6 +40,21 @@ type Order struct {
 }
 
 var db *mongo.Database
+var mqttClient mqtt.Client
+
+func initMQTT() {
+    opts := mqtt.NewClientOptions()
+    opts.AddBroker("tcp://62.181.53.145:1883")
+    opts.SetClientID("2mov_driver")
+    opts.SetCleanSession(true)
+    
+    mqttClient = mqtt.NewClient(opts)
+    if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+        log.Printf("⚠️ MQTT connect error: %v (будем работать без MQTT)", token.Error())
+        return
+    }
+    log.Println("✅ MQTT connected")
+}
 
 func main() {
     token := os.Getenv("MAX_BOT_TOKEN")
@@ -55,6 +72,9 @@ func main() {
     }
     db = mongoClient.Database("2mov")
     log.Println("✅ Подключение к MongoDB установлено")
+    
+    // Инициализация MQTT
+    initMQTT()
 
     // Установка подсказок команд
     go func() {
@@ -173,15 +193,27 @@ func main() {
                 recipient = chat.DriverID
                 senderRole = "👤 Клиент"
             }
+            
+            fullText := fmt.Sprintf("%s: %s", senderRole, text)
+            
+            // Сохраняем в MongoDB (старый способ, для обратной совместимости)
             msg := bson.M{
                 "order_id":   "",
                 "from_user":  "driver_" + userIDStr,
                 "to_user":    "client_" + recipient,
-                "text":       fmt.Sprintf("%s: %s", senderRole, text),
+                "text":       fullText,
                 "status":     "pending",
                 "created_at": time.Now(),
             }
             db.Collection("chat_messages").InsertOne(context.Background(), msg)
+            
+            // Отправляем через MQTT (новый способ)
+            if mqttClient != nil && mqttClient.IsConnected() {
+                topic := "chat/" + recipient
+                mqttClient.Publish(topic, 1, false, fullText)
+                log.Printf("📡 MQTT publish to %s: %s", topic, fullText)
+            }
+            
             sendMessage(token, userIDStr, "✅ Сообщение отправлено")
             w.WriteHeader(http.StatusOK)
             return
@@ -359,7 +391,7 @@ func main() {
         http.ListenAndServe(":8080", nil)
     }()
 
-    // Фоновая проверка сообщений для водителя
+    // Фоновая проверка сообщений для водителя (старый тикер, пока оставляем)
     go func() {
         ticker := time.NewTicker(3 * time.Second)
         for range ticker.C {
@@ -397,6 +429,9 @@ func main() {
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
 }
+
+
+//===
 
 func acceptOrder(token, driverID, orderIDHex string) {
     collection := db.Collection("orders")

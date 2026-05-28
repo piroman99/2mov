@@ -1,7 +1,8 @@
-FROM golang:1.21 AS builder
+FROM golang:1.24 AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
+RUN go get github.com/eclipse/paho.mqtt.golang
 COPY . .
 RUN go build -o /2mov-bot ./main.go
 

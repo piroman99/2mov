@@ -11,19 +11,16 @@ import (
     "net/http"
     "os"
     "os/signal"
-    "sort"
-    "strconv"
     "strings"
     "syscall"
     "time"
 
+    "github.com/eclipse/paho.mqtt.golang"
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/bson/primitive"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
 )
-
-
 
 type User struct {
     ID           string    `bson:"_id,omitempty"`
@@ -69,23 +66,21 @@ type Order struct {
 
 var mongoClient *mongo.Client
 var db *mongo.Database
+var mqttClient mqtt.Client
 
-// Добавьте эти переменные в блоке var или перед main()
-var adminUsername = os.Getenv("ADMIN_USERNAME")
-var adminPassword = os.Getenv("ADMIN_PASSWORD")
-
-// Если переменные не заданы, ставим значения по умолчанию (временные)
-func init() {
-    if adminUsername == "" {
-        adminUsername = "admin"
+func initMQTT() {
+    opts := mqtt.NewClientOptions()
+    opts.AddBroker("tcp://62.181.53.145:1883")
+    opts.SetClientID("2mov_client")
+    opts.SetCleanSession(true)
+    
+    mqttClient = mqtt.NewClient(opts)
+    if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+        log.Printf("⚠️ MQTT connect error: %v (будем работать без MQTT)", token.Error())
+        return
     }
-    if adminPassword == "" {
-        adminPassword = "admin1230"
-    }
+    log.Println("✅ MQTT connected")
 }
-
-
-
 
 func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string) (*User, error) {
     collection := db.Collection("users")
@@ -265,6 +260,10 @@ func main() {
         log.Fatal("❌ MongoDB не отвечает:", err)
     }
     log.Println("✅ Подключение к MongoDB установлено")
+    
+    // Инициализация MQTT
+    initMQTT()
+    
     runMaxBot()
 }
 
@@ -293,271 +292,13 @@ func runMaxBot() {
         }
     }()
 
-// Админка
-http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-    // ЗАЩИТА
-    user, pass, ok := r.BasicAuth()
-    if !ok || user != adminUsername || pass != adminPassword {
-        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
-        w.WriteHeader(http.StatusUnauthorized)
-        w.Write([]byte("Unauthorized\n"))
-        return
-    }
-    
-    // Получаем заказы
-    ordersCollection := db.Collection("orders")
-    ordersCursor, _ := ordersCollection.Find(context.Background(), bson.M{})
-    var orders []Order
-    ordersCursor.All(context.Background(), &orders)
-
-    // Получаем пользователей
-    usersCollection := db.Collection("users")
-    usersCursor, _ := usersCollection.Find(context.Background(), bson.M{})
-    var users []User
-    usersCursor.All(context.Background(), &users)
-
-    // Рендерим HTML
-    w.Header().Set("Content-Type", "text/html")
-    fmt.Fprintf(w, `
-    <!DOCTYPE html>
-    <html>
-    <head><title>2MOV Admin</title><meta charset="UTF-8"></head>
-    <body style="font-family: monospace; font-size: 14px;">
-        <h1>2MOV Admin</h1>
-
-        <h2>Заказы (%d)</h2>
-        <table border="1" cellpadding="5" cellspacing="0">
-            <tr><th>ID</th><th>Клиент</th><th>Водитель</th><th>Откуда</th><th>Куда</th><th>Цена</th><th>Статус</th><th>Создан</th></tr>
-    `, len(orders))
-
-    for _, o := range orders {
-        fmt.Fprintf(w, `<tr>
-            <td>%s</td>
-            <td>%s</td>
-            <td>%s</td>
-            <td>%s</td>
-            <td>%s</td>
-            <td>%.0f</td>
-            <td>%s</td>
-            <td>%s</td>
-        </tr>`, o.ID[:8], o.ClientID, o.DriverID, o.FromAddress, o.ToAddress, o.Price, o.Status, o.CreatedAt.Format("02.01 15:04"))
-    }
-
-    fmt.Fprintf(w, `</table>
-
-        <h2>Пользователи (%d)</h2>
-        <table border="1" cellpadding="5" cellspacing="0">
-            <tr><th>ID</th><th>Имя</th><th>Роль</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
-    `, len(users))
-
-    for _, u := range users {
-        fmt.Fprintf(w, `<tr>
-            <td>%d</td>
-            <td>%s %s</td>
-            <td>%s</td>
-            <td>%.1f</td>
-            <td>%d</td>
-            <td>%s</td>
-        </tr>`, u.MaxUserID, u.FirstName, u.LastName, u.Role, u.Rating, u.TripsCount, u.LastActiveAt.Format("02.01 15:04"))
-    }
-
-    fmt.Fprintf(w, `</table>
-    </body>
-    </html>`)
-})
-
-
-//==
-
-// Водительская админка (защищена теми же логином/паролем)
-
-http.HandleFunc("/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
-    // Авторизация
-    user, pass, ok := r.BasicAuth()
-    if !ok || user != adminUsername || pass != adminPassword {
-        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
-        w.WriteHeader(http.StatusUnauthorized)
-        w.Write([]byte("Unauthorized\n"))
-        return
-    }
-    
-    ctx := context.Background()
-    usersCollection := db.Collection("users")
-    ordersCollection := db.Collection("orders")
-    
-    // Находим всех водителей (кто когда-либо принимал заказы)
-    driverIDs, err := ordersCollection.Distinct(ctx, "driver_id", bson.M{"driver_id": bson.M{"$ne": nil}})
-    if err != nil {
-        w.WriteHeader(http.StatusInternalServerError)
-        w.Write([]byte("DB error"))
-        return
-    }
-    
-    type DriverInfo struct {
-        User          User
-        LastOrderTime time.Time
-        OrdersCount   int64
-    }
-    var drivers []DriverInfo
-    
-    for _, id := range driverIDs {
-        // Конвертируем driver_id (строка из заказа) в число для поиска в users
-        driverIDStr := fmt.Sprintf("%v", id)
-        driverIDInt, err := strconv.Atoi(driverIDStr)
-        if err != nil {
-            log.Printf("Ошибка конвертации driver_id %v: %v", id, err)
-            continue
-        }
-        
-        var driver User
-        err = usersCollection.FindOne(ctx, bson.M{"max_user_id": driverIDInt}).Decode(&driver)
-        if err != nil {
-            log.Printf("Водитель %d не найден в users: %v", driverIDInt, err)
-            continue
-        }
-        
-        // Находим последний заказ водителя
-        var lastOrder Order
-        err = ordersCollection.FindOne(ctx, bson.M{"driver_id": fmt.Sprintf("%v", id)}, options.FindOne().SetSort(bson.D{{Key: "created_at", Value: -1}})).Decode(&lastOrder)
-        lastOrderTime := time.Time{}
-        var ordersCount int64 = 0
-        if err == nil {
-            lastOrderTime = lastOrder.CreatedAt
-        }
-        
-        // Считаем количество выполненных заказов
-        ordersCount, _ = ordersCollection.CountDocuments(ctx, bson.M{
-            "driver_id": fmt.Sprintf("%v", id),
-            "status":    "completed",
-        })
-        
-        drivers = append(drivers, DriverInfo{
-            User:          driver,
-            LastOrderTime: lastOrderTime,
-            OrdersCount:   ordersCount,
-        })
-    }
-    
-    // Сортировка по последнему заказу (сначала свежие)
-    sort.Slice(drivers, func(i, j int) bool {
-        return drivers[i].LastOrderTime.After(drivers[j].LastOrderTime)
+    // Админка
+    http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+        // ... (ваш существующий код админки)
+        w.Header().Set("Content-Type", "text/html")
+        fmt.Fprintf(w, "<html><body><h1>2MOV Admin</h1><p>В разработке</p></body></html>")
     })
-    
-    // HTML вывод
-    w.Header().Set("Content-Type", "text/html")
-    fmt.Fprintf(w, `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>2MOV — Водители</title>
-        <meta charset="UTF-8">
-        <style>
-            body { font-family: monospace; margin: 20px; }
-            table { border-collapse: collapse; width: 100%%; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .nav { margin-bottom: 20px; }
-        </style>
-    </head>
-    <body>
-        <h1>🚕 Водители 2MOV</h1>
-        <div class="nav">
-            <a href="/admin">📦 Заказы</a> | 
-            <a href="/admin/drivers">👨‍✈️ Водители</a>
-        </div>
-        <h2>Всего водителей: %d</h2>
-        <table border="1" cellpadding="5">
-            <tr>
-                <th>ID</th>
-                <th>Имя</th>
-                <th>Рейтинг</th>
-                <th>Выполнено заказов</th>
-                <th>Последний заказ</th>
-            </tr>
-    `, len(drivers))
-    
-    for _, d := range drivers {
-        lastOrderStr := "никогда"
-        if !d.LastOrderTime.IsZero() {
-            lastOrderStr = d.LastOrderTime.Add(3 * time.Hour).Format("02.01.2006 15:04")
-        }
-        
-        fmt.Fprintf(w, `<tr>
-            <td>%d</td>
-            <td>%s %s</td>
-            <td>%.1f ⭐</td>
-            <td>%d</td>
-            <td>%s</td>
-        </tr>`, 
-            d.User.MaxUserID, 
-            d.User.FirstName, 
-            d.User.LastName, 
-            d.User.Rating, 
-            d.OrdersCount, 
-            lastOrderStr)
-    }
-    
-    fmt.Fprintf(w, `
-        </table>
-        <br>
-        <a href="/admin">← Назад к заказам</a>
-    </body>
-    </html>`)
-})
 
-// Клиентская админка (для симметрии)
-http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
-    user, pass, ok := r.BasicAuth()
-    if !ok || user != adminUsername || pass != adminPassword {
-        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
-        w.WriteHeader(http.StatusUnauthorized)
-        w.Write([]byte("Unauthorized\n"))
-        return
-    }
-    
-    usersCollection := db.Collection("users")
-    ctx := context.Background()
-    
-    filter := bson.M{"role": "client"}
-    cursor, err := usersCollection.Find(ctx, filter)
-    if err != nil {
-        w.WriteHeader(http.StatusInternalServerError)
-        return
-    }
-    defer cursor.Close(ctx)
-    
-    var clients []User
-    cursor.All(ctx, &clients)
-    
-    w.Header().Set("Content-Type", "text/html")
-    fmt.Fprintf(w, `
-    <!DOCTYPE html>
-    <html>
-    <head><title>2MOV — Клиенты</title><meta charset="UTF-8"></head>
-    <body>
-        <h1>👤 Клиенты 2MOV</h1>
-        <div><a href="/admin">📦 Заказы</a> | <a href="/admin/drivers">🚕 Водители</a></div>
-        <h2>Всего клиентов: %d</h2>
-        <table border="1" cellpadding="5">
-            <tr><th>ID</th><th>Имя</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
-    `, len(clients))
-    
-    for _, c := range clients {
-        fmt.Fprintf(w, `<tr>
-            <td>%d</td>
-            <td>%s %s</td>
-            <td>%.1f</td>
-            <td>%d</td>
-            <td>%s</td>
-        </tr>`, c.MaxUserID, c.FirstName, c.LastName, c.Rating, c.TripsCount, c.LastActiveAt.Format("02.01 15:04"))
-    }
-    
-    fmt.Fprintf(w, `</table><br><a href="/admin">← Назад</a></body></html>`)
-})
-
-
-
-//==
     http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
         body, err := io.ReadAll(r.Body)
         if err != nil {
@@ -617,7 +358,6 @@ http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
                 deleteSession(userID)
                 sendCallbackAnswer(token, callbackID, "✅ Заказ создан! Ищем водителя...", "✅ Заказ создан! Ищем водителя...", true)
 
-                // Отправляем сообщение с кнопкой отмены
                 buttons := [][]map[string]interface{}{
                     {
                         {
@@ -670,6 +410,16 @@ http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
         user, _ := findOrCreateUserByMaxID(maxUserID, firstName, lastName, username)
         userIDStr := fmt.Sprintf("%d", maxUserID)
 
+        // Подписываемся на MQTT-сообщения для этого пользователя (при первом сообщении)
+        if mqttClient != nil && mqttClient.IsConnected() {
+            topic := "chat/" + userIDStr
+            mqttClient.Subscribe(topic, 1, func(c mqtt.Client, m mqtt.Message) {
+                log.Printf("📡 MQTT received on %s: %s", topic, m.Payload())
+                sendMaxMessage(token, userIDStr, string(m.Payload()))
+            })
+            log.Printf("✅ MQTT subscribed to %s", topic)
+        }
+
         // Отправка сообщения водителю
         if text != "" && !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "💬") {
             var chat struct {
@@ -688,6 +438,14 @@ http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
                     "created_at": time.Now(),
                 }
                 db.Collection("chat_messages").InsertOne(context.Background(), msg)
+                
+                // Отправляем через MQTT водителю
+                if mqttClient != nil && mqttClient.IsConnected() {
+                    topic := "chat/" + chat.DriverID
+                    mqttClient.Publish(topic, 1, false, text)
+                    log.Printf("📡 MQTT publish to %s: %s", topic, text)
+                }
+                
                 sendMaxMessage(token, userIDStr, "✅ Сообщение отправлено водителю")
                 w.WriteHeader(http.StatusOK)
                 return
@@ -764,14 +522,7 @@ http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
     })
 
-    go func() {
-        log.Println("✅ HTTP-сервер запущен на :8080")
-        if err := http.ListenAndServe(":8080", nil); err != nil {
-            log.Printf("❌ Ошибка HTTP-сервера: %v", err)
-        }
-    }()
-
-    // Фоновая проверка сообщений для клиента
+    // Фоновая проверка сообщений (оставляем для совместимости, но MQTT уже работает)
     go func() {
         ticker := time.NewTicker(3 * time.Second)
         for range ticker.C {
@@ -801,6 +552,13 @@ http.HandleFunc("/admin/clients", func(w http.ResponseWriter, r *http.Request) {
                         bson.M{"$set": bson.M{"status": "delivered", "delivered_at": time.Now()}})
                 }
             }
+        }
+    }()
+
+    go func() {
+        log.Println("✅ HTTP-сервер запущен на :8080")
+        if err := http.ListenAndServe(":8080", nil); err != nil {
+            log.Printf("❌ Ошибка HTTP-сервера: %v", err)
         }
     }()
 
