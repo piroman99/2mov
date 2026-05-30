@@ -124,6 +124,21 @@ func main() {
     bot.Debug = true
     log.Printf("✅ Bot authorized: @%s", bot.Self.UserName)
 
+// Установка команд (меню)
+   commands := []tgbotapi.BotCommand{
+       {Command: "start", Description: "🚕 Главное меню"},
+       {Command: "order", Description: "📦 Создать заказ"},
+       {Command: "profile", Description: "👤 Мой профиль"},
+       {Command: "help", Description: "❓ Помощь"},
+       {Command: "history", Description: "📋 История заказов"},
+   }
+   _, err = bot.Request(tgbotapi.NewSetMyCommands(commands...))
+   if err != nil {
+       log.Printf("⚠️ Не удалось установить команды: %v", err)
+   } else {
+       log.Println("✅ Команды бота установлены")
+   }
+
     // Устанавливаем вебхук
     webhook, err := tgbotapi.NewWebhook(webhookURL)
     if err != nil {
