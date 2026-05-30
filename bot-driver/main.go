@@ -468,6 +468,14 @@ func acceptOrder(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
+   // MQTT публикация статуса "accepted"
+   if mqttClient != nil && mqttClient.IsConnected() {
+       topic := fmt.Sprintf("status/%s", order.ClientID)
+       mqttClient.Publish(topic, 1, false, "accepted")
+       log.Printf("📡 MQTT publish status to %s: accepted", topic)
+   }
+
+
     // Отправляем водителю статус
     sendOrderStatusToDriver(token, order)
 }
@@ -541,6 +549,13 @@ func updateOrderStatus(token, orderID, status, notificationText string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
+   // MQTT публикация статуса
+   if mqttClient != nil && mqttClient.IsConnected() {
+       topic := fmt.Sprintf("status/%s", order.ClientID)
+       mqttClient.Publish(topic, 1, false, status)
+       log.Printf("📡 MQTT publish status to %s: %s", topic, status)
+   }
+
     // Отправляем водителю обновлённый статус
     sendOrderStatusToDriver(token, order)
 
@@ -574,6 +589,12 @@ func completeOrder(token, driverID, orderIDHex string) {
         "created_at": time.Now(),
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
+   // MQTT публикация статуса "completed"
+   if mqttClient != nil && mqttClient.IsConnected() {
+       topic := fmt.Sprintf("status/%s", order.ClientID)
+       mqttClient.Publish(topic, 1, false, "completed")
+       log.Printf("📡 MQTT publish status to %s: completed", topic)
+   }
 
     // Закрываем чат через 15 секунд
     go func() {
