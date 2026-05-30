@@ -8,17 +8,19 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "strconv"
     "strings"
     "syscall"
     "time"
 
+    "github.com/eclipse/paho.mqtt.golang"
     "github.com/go-telegram-bot-api/telegram-bot-api/v5"
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// Структуры данных
+// Структуры
 type User struct {
     ID           string    `bson:"_id,omitempty"`
     TelegramID   string    `bson:"telegram_id"`
@@ -60,7 +62,33 @@ type Order struct {
 }
 
 var db *mongo.Database
-///===
+var mqttClient mqtt.Client
+//
+func initMQTT() {
+    broker := os.Getenv("MQTT_BROKER")
+    if broker == "" {
+        broker = "tcp://127.0.0.1:1883"
+    }
+    clientID := os.Getenv("MQTT_CLIENT_ID")
+    if clientID == "" {
+        clientID = "2mov_telegram"
+    }
+    
+    opts := mqtt.NewClientOptions()  // ← эта строка должна быть
+    opts.AddBroker(broker)
+    opts.SetClientID(clientID)
+    opts.SetCleanSession(true)
+    opts.SetAutoReconnect(true)
+    
+    mqttClient = mqtt.NewClient(opts)
+    if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+        log.Printf("⚠️ MQTT connect error: %v", token.Error())
+        return
+    }
+    log.Println("✅ MQTT connected")
+}
+//
+
 func main() {
     token := os.Getenv("TG_BOT_TOKEN")
     if token == "" {
@@ -77,13 +105,18 @@ func main() {
         mongoURI = "mongodb://localhost:27017"
     }
 
+    // Подключение к MongoDB
     mongoClient, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
     if err != nil {
         log.Fatal("MongoDB connection error:", err)
     }
     db = mongoClient.Database("2mov")
     log.Println("✅ Connected to MongoDB")
+    
+    // Инициализация MQTT
+    initMQTT()
 
+    // Создаём бота
     bot, err := tgbotapi.NewBotAPI(token)
     if err != nil {
         log.Fatal("Bot creation error:", err)
@@ -120,13 +153,64 @@ func main() {
             log.Fatalf("Server error: %v", err)
         }
     }()
+    
+    // Подписка на MQTT топики
+    if mqttClient != nil && mqttClient.IsConnected() {
+        // Подписка на чат-сообщения
+        mqttClient.Subscribe("chat/+", 1, func(c mqtt.Client, m mqtt.Message) {
+            parts := strings.Split(m.Topic(), "/")
+            if len(parts) == 2 {
+                userID := parts[1]
+                tgChatID, err := strconv.ParseInt(userID, 10, 64)
+                if err == nil {
+                    sendMessage(bot, tgChatID, string(m.Payload()))
+                }
+            }
+        })
+        
+        // Подписка на статусы
+        mqttClient.Subscribe("status/+", 1, func(c mqtt.Client, m mqtt.Message) {
+            parts := strings.Split(m.Topic(), "/")
+            if len(parts) == 2 {
+                userID := parts[1]
+                tgChatID, err := strconv.ParseInt(userID, 10, 64)
+                if err == nil {
+                    status := string(m.Payload())
+                    text := getStatusText(status)
+                    if text != "" {
+                        sendMessage(bot, tgChatID, text)
+                    }
+                }
+            }
+        })
+        
+        log.Println("✅ MQTT subscriptions added")
+    }
 
+    // Ожидание сигнала завершения
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
     log.Println("👋 Bot stopped")
 }
-//==
+
+func getStatusText(status string) string {
+    switch status {
+    case "accepted":
+        return "✅ Водитель принял ваш заказ!"
+    case "at_pickup":
+        return "📍 Водитель на месте забора"
+    case "to_delivery":
+        return "🚚 Водитель выехал на доставку"
+    case "at_delivery":
+        return "📍 Водитель на месте доставки"
+    case "completed":
+        return "✅ Заказ выполнен. Спасибо за поездку!"
+    default:
+        return ""
+    }
+}
+
 func handleUpdate(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
     if update.Message != nil {
         handleMessage(bot, update.Message)
@@ -140,15 +224,23 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
     if msg == nil || msg.From == nil {
         return
     }
+    startTime := time.Now()
     userID := fmt.Sprintf("%d", msg.From.ID)
     text := msg.Text
-
+    
+    log.Printf("📩 [%d] Входящее сообщение: %s", msg.From.ID, text)
+    log.Printf("⏱️ [%d] Начало findOrCreateUser", msg.From.ID)
+    
     user := findOrCreateUser(userID, msg.From.FirstName, msg.From.LastName, msg.From.UserName)
+    
+    log.Printf("⏱️ [%d] findOrCreateUser завершено за %v", msg.From.ID, time.Since(startTime))
 
     switch text {
     case "/start":
         reply := fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", msg.From.FirstName, user.Rating)
+        log.Printf("⏱️ [%d] Вызов sendMessage для /start", msg.From.ID)
         sendMessage(bot, msg.Chat.ID, reply)
+        log.Printf("⏱️ [%d] Команда /start обработана за %v", msg.From.ID, time.Since(startTime))
     case "/help":
         reply := "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ"
         sendMessage(bot, msg.Chat.ID, reply)
@@ -240,21 +332,26 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
                 tgbotapi.NewInlineKeyboardButtonData("✏️ Отмена", "cancel_"+session.UserID),
             ),
         )
-        msg := tgbotapi.NewMessage(msg.Chat.ID, reply)
-        msg.ReplyMarkup = buttons
-        bot.Send(msg)
+        newMsg := tgbotapi.NewMessage(msg.Chat.ID, reply)
+        newMsg.ReplyMarkup = buttons
+        bot.Send(newMsg)
     default:
         sendMessage(bot, msg.Chat.ID, "❓ Отправьте /order для нового заказа")
     }
 }
 
 func findOrCreateUser(telegramID, firstName, lastName, username string) *User {
+    startTime := time.Now()
     collection := db.Collection("users")
     ctx := context.Background()
     var user User
     err := collection.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&user)
+    
+    log.Printf("⏱️ findOrCreateUser: FindOne занял %v", time.Since(startTime))
+    
     if err == nil {
         collection.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, bson.M{"$set": bson.M{"last_active_at": time.Now()}})
+        log.Printf("⏱️ findOrCreateUser: всего (существующий) %v", time.Since(startTime))
         return &user
     }
     newUser := User{
@@ -269,6 +366,7 @@ func findOrCreateUser(telegramID, firstName, lastName, username string) *User {
         LastActiveAt: time.Now(),
     }
     collection.InsertOne(ctx, newUser)
+    log.Printf("⏱️ findOrCreateUser: всего (новый) %v", time.Since(startTime))
     return &newUser
 }
 
@@ -302,6 +400,8 @@ func saveOrder(order Order) error {
 }
 
 func sendMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
+    start := time.Now()
     msg := tgbotapi.NewMessage(chatID, text)
-    bot.Send(msg)
+    _, err := bot.Send(msg)
+    log.Printf("⏱️ sendMessage to %d занял %v (error: %v)", chatID, time.Since(start), err)
 }
