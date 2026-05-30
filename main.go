@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -69,17 +70,39 @@ var db *mongo.Database
 var mqttClient mqtt.Client
 
 func initMQTT() {
+    broker := os.Getenv("MQTT_BROKER")
+    if broker == "" {
+        broker = "tcp://62.181.53.145:1883"
+    }
     opts := mqtt.NewClientOptions()
-    opts.AddBroker("tcp://62.181.53.145:1883")
+    opts.AddBroker(broker)
     opts.SetClientID("2mov_client")
     opts.SetCleanSession(true)
+    opts.SetAutoReconnect(true)
     
     mqttClient = mqtt.NewClient(opts)
     if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
-        log.Printf("⚠️ MQTT connect error: %v (будем работать без MQTT)", token.Error())
+        log.Printf("⚠️ MQTT connect error: %v", token.Error())
         return
     }
     log.Println("✅ MQTT connected")
+}
+
+func getStatusText(status string) string {
+    switch status {
+    case "accepted":
+        return "✅ Водитель принял ваш заказ!"
+    case "at_pickup":
+        return "📍 Водитель на месте забора"
+    case "to_delivery":
+        return "🚚 Водитель выехал на доставку"
+    case "at_delivery":
+        return "📍 Водитель на месте доставки"
+    case "completed":
+        return "✅ Заказ выполнен. Спасибо за поездку!"
+    default:
+        return ""
+    }
 }
 
 func findOrCreateUserByMaxID(maxUserID int, firstName, lastName, username string) (*User, error) {
@@ -273,6 +296,15 @@ func runMaxBot() {
         log.Fatal("❌ MAX_BOT_TOKEN не задан")
     }
 
+    adminUsername := os.Getenv("ADMIN_USERNAME")
+    adminPassword := os.Getenv("ADMIN_PASSWORD")
+    if adminUsername == "" {
+        adminUsername = "admin"
+    }
+    if adminPassword == "" {
+        adminPassword = "admin123"
+    }
+
     // Установка подсказок команд
     go func() {
         commands := `{"commands":[
@@ -292,11 +324,108 @@ func runMaxBot() {
         }
     }()
 
-    // Админка
+    // Подписка на статусы через MQTT
+    if mqttClient != nil && mqttClient.IsConnected() {
+        mqttClient.Subscribe("status/+", 1, func(c mqtt.Client, m mqtt.Message) {
+            parts := strings.Split(m.Topic(), "/")
+            if len(parts) == 2 {
+                clientID := parts[1]
+                status := string(m.Payload())
+                text := getStatusText(status)
+                if text != "" {
+                    sendMaxMessage(token, clientID, text)
+                }
+            }
+        })
+        log.Println("✅ MQTT status subscription added")
+    }
+
+    // Админка - заказы
     http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-        // ... (ваш существующий код админки)
+        user, pass, ok := r.BasicAuth()
+        if !ok || user != adminUsername || pass != adminPassword {
+            w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
+            w.WriteHeader(http.StatusUnauthorized)
+            return
+        }
+        
+        ordersCollection := db.Collection("orders")
+        ordersCursor, _ := ordersCollection.Find(context.Background(), bson.M{})
+        var orders []Order
+        ordersCursor.All(context.Background(), &orders)
+        
+        usersCollection := db.Collection("users")
+        usersCursor, _ := usersCollection.Find(context.Background(), bson.M{})
+        var users []User
+        usersCursor.All(context.Background(), &users)
+        
         w.Header().Set("Content-Type", "text/html")
-        fmt.Fprintf(w, "<html><body><h1>2MOV Admin</h1><p>В разработке</p></body></html>")
+        fmt.Fprintf(w, `<!DOCTYPE html>
+        <html>
+        <head><title>2MOV Admin</title><meta charset="UTF-8"></head>
+        <body style="font-family: monospace; font-size: 14px;">
+            <h1>2MOV Admin</h1>
+            <p><a href="/admin/drivers">🚕 Водители</a></p>
+            <h2>Заказы (%d)</h2>
+            <table border="1" cellpadding="5">
+                <tr><th>ID</th><th>Клиент</th><th>Водитель</th><th>Откуда</th><th>Куда</th><th>Цена</th><th>Статус</th><th>Создан</th></tr>
+        `, len(orders))
+        
+        for _, o := range orders {
+            fmt.Fprintf(w, `<tr>
+                <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.0f</td><td>%s</td><td>%s</td>
+            </tr>`, o.ID[:8], o.ClientID, o.DriverID, o.FromAddress, o.ToAddress, o.Price, o.Status, o.CreatedAt.Format("02.01 15:04"))
+        }
+        
+        fmt.Fprintf(w, `</table>
+            <h2>Пользователи (%d)</h2>
+            <table border="1" cellpadding="5">
+                <tr><th>ID</th><th>Имя</th><th>Роль</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
+        `, len(users))
+        
+        for _, u := range users {
+            fmt.Fprintf(w, `<tr>
+                <tr>%d</td><td>%s %s</td><td>%s</td><td>%.1f</td><td>%d</td><td>%s</td>
+            </tr>`, u.MaxUserID, u.FirstName, u.LastName, u.Role, u.Rating, u.TripsCount, u.LastActiveAt.Format("02.01 15:04"))
+        }
+        
+        fmt.Fprintf(w, `</table></body></html>`)
+    })
+
+    // Админка - водители
+    http.HandleFunc("/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
+        user, pass, ok := r.BasicAuth()
+        if !ok || user != adminUsername || pass != adminPassword {
+            w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
+            w.WriteHeader(http.StatusUnauthorized)
+            return
+        }
+        
+        usersCollection := db.Collection("users")
+        cursor, _ := usersCollection.Find(context.Background(), bson.M{})
+        var users []User
+        cursor.All(context.Background(), &users)
+        
+        w.Header().Set("Content-Type", "text/html")
+        fmt.Fprintf(w, `<!DOCTYPE html>
+        <html>
+        <head><title>2MOV Водители</title><meta charset="UTF-8"></head>
+        <body>
+            <h1>🚕 Все пользователи</h1>
+            <p><a href="/admin">← Назад к заказам</a></p>
+            <table border="1">
+                <tr><th>ID</th><th>Имя</th><th>Роль</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
+        `)
+        for _, u := range users {
+            role := u.Role
+            if role == "" {
+                role = "client"
+            }
+            fmt.Fprintf(w, `<tr>
+                <td>%d</td><td>%s %s</td><td>%s</td><td>%.1f</td><td>%d</td><td>%s</td>
+            </tr>`, u.MaxUserID, u.FirstName, u.LastName, role, u.Rating, u.TripsCount, u.LastActiveAt.Format("02.01 15:04"))
+        }
+        fmt.Fprintf(w, `</table></body></html>`)
     })
 
     http.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
@@ -410,7 +539,7 @@ func runMaxBot() {
         user, _ := findOrCreateUserByMaxID(maxUserID, firstName, lastName, username)
         userIDStr := fmt.Sprintf("%d", maxUserID)
 
-        // Подписываемся на MQTT-сообщения для этого пользователя (при первом сообщении)
+        // Подписываемся на MQTT-сообщения для этого пользователя
         if mqttClient != nil && mqttClient.IsConnected() {
             topic := "chat/" + userIDStr
             mqttClient.Subscribe(topic, 1, func(c mqtt.Client, m mqtt.Message) {
@@ -439,7 +568,6 @@ func runMaxBot() {
                 }
                 db.Collection("chat_messages").InsertOne(context.Background(), msg)
                 
-                // Отправляем через MQTT водителю
                 if mqttClient != nil && mqttClient.IsConnected() {
                     topic := "chat/" + chat.DriverID
                     mqttClient.Publish(topic, 1, false, text)
@@ -522,7 +650,7 @@ func runMaxBot() {
         w.WriteHeader(http.StatusOK)
     })
 
-    // Фоновая проверка сообщений (оставляем для совместимости, но MQTT уже работает)
+/*    // Фоновая проверка сообщений (оставляем для совместимости, но MQTT уже работает)
     go func() {
         ticker := time.NewTicker(3 * time.Second)
         for range ticker.C {
@@ -554,7 +682,7 @@ func runMaxBot() {
             }
         }
     }()
-
+*/
     go func() {
         log.Println("✅ HTTP-сервер запущен на :8080")
         if err := http.ListenAndServe(":8080", nil); err != nil {
