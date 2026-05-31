@@ -19,24 +19,9 @@ import (
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
+    "2mov-bot-driver/internal/models"
+    "2mov-bot-driver/internal/utils"
 )
-
-type Order struct {
-    ID          string    `bson:"_id,omitempty"`
-    ClientID    string    `bson:"client_id"`
-    FromAddress string    `bson:"from_address"`
-    FromLat     float64   `bson:"from_lat"`
-    FromLon     float64   `bson:"from_lon"`
-    ToAddress   string    `bson:"to_address"`
-    ToLat       float64   `bson:"to_lat"`
-    ToLon       float64   `bson:"to_lon"`
-    Price       float64   `bson:"price"`
-    Status      string    `bson:"status"`
-    DriverID    string    `bson:"driver_id,omitempty"`
-    CreatedAt   time.Time `bson:"created_at"`
-    CancelledBy string    `bson:"cancelled_by,omitempty"`
-    CancelledAt time.Time `bson:"cancelled_at,omitempty"`
-}
 
 var db *mongo.Database
 var mqttClient mqtt.Client
@@ -78,19 +63,6 @@ func main() {
     log.Println("✅ Подключение к MongoDB установлено")
 
     initMQTT()
-
-    // Подписка на входящие сообщения от клиентов
-    if mqttClient != nil && mqttClient.IsConnected() {
-        mqttClient.Subscribe("chat/+", 1, func(c mqtt.Client, m mqtt.Message) {
-            parts := strings.Split(m.Topic(), "/")
-            if len(parts) == 2 {
-                driverID := parts[1]
-                log.Printf("📡 MQTT received for driver %s: %s", driverID, m.Payload())
-                sendMessage(token, driverID, string(m.Payload()))
-            }
-        })
-        log.Println("✅ MQTT driver subscribed to chat/+")
-    }
 
     // Установка подсказок команд
     go func() {
@@ -135,11 +107,11 @@ func main() {
             // Обработка выбора заказа для отправки сообщения
             if strings.HasPrefix(payload, "send_") {
                 orderID := strings.TrimPrefix(payload, "send_")
-                var order Order
+                var order models.Order
                 db.Collection("orders").FindOne(context.Background(),
                     bson.M{"_id": orderID}).Decode(&order)
                 if order.ClientID != "" {
-                    sendMessage(token, userID, fmt.Sprintf("✅ Выбран заказ #%s. Теперь отправьте сообщение.", orderID[:8]))
+                    utils.SendMessage(token, userID, fmt.Sprintf("✅ Выбран заказ #%s. Теперь отправьте сообщение.", orderID[:8]))
                 }
                 answerURL := fmt.Sprintf("https://platform-api.max.ru/answers?callback_id=%s", callbackID)
                 answerBody := map[string]interface{}{"notification": "✅"}
@@ -209,21 +181,21 @@ func main() {
         // Обработка текстового сообщения (чат) — с выбором активного заказа
         if text != "" && !strings.HasPrefix(text, "/") {
             // Находим все активные заказы водителя
-            var activeOrders []Order
+            var activeOrders []models.Order
             cursor, err := db.Collection("orders").Find(context.Background(),
                 bson.M{
                     "driver_id": userIDStr,
                     "status":    bson.M{"$in": []string{"accepted", "at_pickup", "to_delivery", "at_delivery"}},
                 })
             if err != nil {
-                sendMessage(token, userIDStr, "❌ Ошибка получения заказов")
+                utils.SendMessage(token, userIDStr, "❌ Ошибка получения заказов")
                 w.WriteHeader(http.StatusOK)
                 return
             }
             cursor.All(context.Background(), &activeOrders)
 
             if len(activeOrders) == 0 {
-                sendMessage(token, userIDStr, "❌ Нет активных заказов")
+                utils.SendMessage(token, userIDStr, "❌ Нет активных заказов")
                 w.WriteHeader(http.StatusOK)
                 return
             }
@@ -232,11 +204,9 @@ func main() {
             var orderID string
 
             if len(activeOrders) == 1 {
-                // Один заказ — берём его
                 orderID = activeOrders[0].ID
                 recipient = activeOrders[0].ClientID
             } else {
-                // Несколько заказов — показываем кнопки выбора
                 var buttons [][]map[string]interface{}
                 for _, order := range activeOrders {
                     btnText := fmt.Sprintf("Заказ #%s: %s → %s", order.ID[:8], order.FromAddress, order.ToAddress)
@@ -248,15 +218,13 @@ func main() {
                         },
                     })
                 }
-                sendMessageWithButtons(token, userIDStr, "Выберите заказ для отправки сообщения:", buttons)
+                utils.SendMessageWithButtons(token, userIDStr, "Выберите заказ для отправки сообщения:", buttons)
                 w.WriteHeader(http.StatusOK)
                 return
             }
 
-            // Отправляем сообщение
             fullText := fmt.Sprintf("🚕 Водитель: %s", text)
 
-            // Сохраняем в MongoDB (для истории)
             msg := bson.M{
                 "order_id":   orderID,
                 "from_user":  "driver_" + userIDStr,
@@ -267,14 +235,13 @@ func main() {
             }
             db.Collection("chat_messages").InsertOne(context.Background(), msg)
 
-            // Отправляем через MQTT
             if mqttClient != nil && mqttClient.IsConnected() {
                 topic := "chat/" + recipient
                 mqttClient.Publish(topic, 1, false, fullText)
                 log.Printf("📡 MQTT publish to %s: %s", topic, fullText)
             }
 
-            sendMessage(token, userIDStr, "✅ Сообщение отправлено")
+            utils.SendMessage(token, userIDStr, "✅ Сообщение отправлено")
             w.WriteHeader(http.StatusOK)
             return
         }
@@ -285,21 +252,21 @@ func main() {
 
         switch command {
         case "/start":
-            sendMessage(token, userIDStr, "🚕 Водительский бот 2MOV готов!\n/help — список команд")
+            utils.SendMessage(token, userIDStr, "🚕 Водительский бот 2MOV готов!\n/help — список команд")
         case "/help":
-            sendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/orders — список заказов\n/myorders — мои заказы")
+            utils.SendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/orders — список заказов\n/myorders — мои заказы")
         case "/orders":
             collection := db.Collection("orders")
             filter := bson.M{"status": "pending"}
             cursor, err := collection.Find(context.Background(), filter)
             if err != nil {
-                sendMessage(token, userIDStr, "❌ Ошибка получения заказов")
+                utils.SendMessage(token, userIDStr, "❌ Ошибка получения заказов")
                 break
             }
-            var orders []Order
+            var orders []models.Order
             cursor.All(context.Background(), &orders)
             if len(orders) == 0 {
-                sendMessage(token, userIDStr, "📭 Нет активных заказов")
+                utils.SendMessage(token, userIDStr, "📭 Нет активных заказов")
                 break
             }
             for _, o := range orders {
@@ -349,7 +316,7 @@ func main() {
                         },
                     },
                 }
-                sendMessageWithButtons(token, userIDStr, reply, buttons)
+                utils.SendMessageWithButtons(token, userIDStr, reply, buttons)
             }
         case "/myorders":
             collection := db.Collection("orders")
@@ -361,13 +328,13 @@ func main() {
             }}
             cursor, err := collection.Find(context.Background(), filter)
             if err != nil {
-                sendMessage(token, userIDStr, "❌ Ошибка получения заказов")
+                utils.SendMessage(token, userIDStr, "❌ Ошибка получения заказов")
                 break
             }
-            var orders []Order
+            var orders []models.Order
             cursor.All(context.Background(), &orders)
             if len(orders) == 0 {
-                sendMessage(token, userIDStr, "📭 Нет принятых заказов")
+                utils.SendMessage(token, userIDStr, "📭 Нет принятых заказов")
                 break
             }
             for _, o := range orders {
@@ -416,10 +383,9 @@ func main() {
                 buttons = append(buttons, []map[string]interface{}{
                     {"type": "callback", "text": "🗺️ Маршрут", "payload": fmt.Sprintf("route_%s", o.ID)},
                 })
-                sendMessageWithButtons(token, userIDStr, reply, buttons)
+                utils.SendMessageWithButtons(token, userIDStr, reply, buttons)
             }
         default:
-            // Обработка вложений
             if msg, ok := update["message"].(map[string]interface{}); ok {
                 if body, ok := msg["body"].(map[string]interface{}); ok {
                     if attachments, ok := body["attachments"].([]interface{}); ok {
@@ -428,13 +394,13 @@ func main() {
                                 if attMap["type"] == "location" {
                                     lat := attMap["latitude"].(float64)
                                     lon := attMap["longitude"].(float64)
-                                    sendMessage(token, userIDStr, fmt.Sprintf("📍 https://yandex.ru/maps/?pt=%f,%f&z=15", lon, lat))
+                                    utils.SendMessage(token, userIDStr, fmt.Sprintf("📍 https://yandex.ru/maps/?pt=%f,%f&z=15", lon, lat))
                                 }
                                 if attMap["type"] == "contact" {
                                     firstName, _ := attMap["first_name"].(string)
                                     lastName, _ := attMap["last_name"].(string)
                                     phone, _ := attMap["phone_number"].(string)
-                                    sendMessage(token, userIDStr, fmt.Sprintf("📱 %s %s\n%s", firstName, lastName, phone))
+                                    utils.SendMessage(token, userIDStr, fmt.Sprintf("📱 %s %s\n%s", firstName, lastName, phone))
                                 }
                             }
                         }
@@ -458,7 +424,7 @@ func main() {
 }
 
 // ----------------------------------------------------------------
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (копируем из вашего старого файла)
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (acceptOrder, cancelOrderByDriver, updateOrderStatus, completeOrder, routeOrder, routeToDelivery, sendOrderStatusToDriver)
 // ----------------------------------------------------------------
 
 func acceptOrder(token, driverID, orderIDHex string) {
@@ -467,14 +433,13 @@ func acceptOrder(token, driverID, orderIDHex string) {
         bson.M{"_id": orderIDHex, "status": "pending"},
         bson.M{"$set": bson.M{"status": "accepted", "driver_id": driverID}})
     if err != nil || result.MatchedCount == 0 {
-        sendMessage(token, driverID, "❌ Не удалось принять заказ. Возможно, его уже взяли.")
+        utils.SendMessage(token, driverID, "❌ Не удалось принять заказ. Возможно, его уже взяли.")
         return
     }
 
-    var order Order
+    var order models.Order
     collection.FindOne(context.Background(), bson.M{"_id": orderIDHex}).Decode(&order)
 
-    // Создаём чат
     chat := bson.M{
         "order_id":   orderIDHex,
         "driver_id":  driverID,
@@ -485,7 +450,6 @@ func acceptOrder(token, driverID, orderIDHex string) {
     }
     db.Collection("chats").InsertOne(context.Background(), chat)
 
-    // Уведомление клиенту
     clientMsg := bson.M{
         "order_id":   orderIDHex,
         "from_user":  "system",
@@ -496,23 +460,21 @@ func acceptOrder(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    // MQTT уведомление
     if mqttClient != nil && mqttClient.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
         mqttClient.Publish(topic, 1, false, "accepted")
         log.Printf("📡 MQTT publish status to %s: accepted", topic)
     }
 
-    // Отправляем водителю статус
     sendOrderStatusToDriver(token, order)
 }
 
 func cancelOrderByDriver(token, driverID, orderIDHex string) {
     collection := db.Collection("orders")
-    var order Order
+    var order models.Order
     err := collection.FindOne(context.Background(), bson.M{"_id": orderIDHex, "driver_id": driverID}).Decode(&order)
     if err != nil {
-        sendMessage(token, driverID, "❌ Заказ не найден")
+        utils.SendMessage(token, driverID, "❌ Заказ не найден")
         return
     }
 
@@ -525,11 +487,10 @@ func cancelOrderByDriver(token, driverID, orderIDHex string) {
         }
     }
     if !allowed {
-        sendMessage(token, driverID, "❌ Отмена невозможна. Заказ уже в пути или доставке.")
+        utils.SendMessage(token, driverID, "❌ Отмена невозможна. Заказ уже в пути или доставке.")
         return
     }
 
-    // Возвращаем заказ в статус pending
     update := bson.M{"$set": bson.M{
         "status":     "pending",
         "driver_id":  nil,
@@ -537,7 +498,6 @@ func cancelOrderByDriver(token, driverID, orderIDHex string) {
     }}
     collection.UpdateOne(context.Background(), bson.M{"_id": orderIDHex}, update)
 
-    // Уведомление клиенту
     clientMsg := bson.M{
         "order_id":   orderIDHex,
         "from_user":  "system",
@@ -548,19 +508,17 @@ func cancelOrderByDriver(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    // MQTT уведомление
     if mqttClient != nil && mqttClient.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
         mqttClient.Publish(topic, 1, false, "pending")
         log.Printf("📡 MQTT publish status to %s: pending", topic)
     }
 
-    // Закрываем чат
     db.Collection("chats").UpdateOne(context.Background(),
         bson.M{"order_id": orderIDHex},
         bson.M{"$set": bson.M{"status": "closed", "updated_at": time.Now()}})
 
-    sendMessage(token, driverID, "✅ Заказ отменён и возвращён в общий список")
+    utils.SendMessage(token, driverID, "✅ Заказ отменён и возвращён в общий список")
 }
 
 func updateOrderStatus(token, orderID, status, notificationText string) {
@@ -569,10 +527,9 @@ func updateOrderStatus(token, orderID, status, notificationText string) {
     update := bson.M{"$set": bson.M{"status": status}}
     collection.UpdateOne(context.Background(), filter, update)
 
-    var order Order
+    var order models.Order
     collection.FindOne(context.Background(), filter).Decode(&order)
 
-    // Уведомление клиенту
     clientMsg := bson.M{
         "order_id":   orderID,
         "from_user":  "system",
@@ -583,14 +540,12 @@ func updateOrderStatus(token, orderID, status, notificationText string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    // MQTT уведомление
     if mqttClient != nil && mqttClient.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
         mqttClient.Publish(topic, 1, false, status)
         log.Printf("📡 MQTT publish status to %s: %s", topic, status)
     }
 
-    // Отправляем водителю обновлённый статус
     sendOrderStatusToDriver(token, order)
 
     if status == "to_delivery" {
@@ -605,14 +560,13 @@ func completeOrder(token, driverID, orderIDHex string) {
 
     result, err := collection.UpdateOne(context.Background(), filter, update)
     if err != nil || result.MatchedCount == 0 {
-        sendMessage(token, driverID, "❌ Не удалось завершить заказ")
+        utils.SendMessage(token, driverID, "❌ Не удалось завершить заказ")
         return
     }
 
-    var order Order
+    var order models.Order
     collection.FindOne(context.Background(), bson.M{"_id": orderIDHex}).Decode(&order)
 
-    // Сообщение клиенту
     clientMsg := bson.M{
         "order_id":   orderIDHex,
         "from_user":  "system",
@@ -623,14 +577,12 @@ func completeOrder(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    // MQTT уведомление
     if mqttClient != nil && mqttClient.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
         mqttClient.Publish(topic, 1, false, "completed")
         log.Printf("📡 MQTT publish status to %s: completed", topic)
     }
 
-    // Закрываем чат через 15 секунд
     go func() {
         time.Sleep(15 * time.Second)
         db.Collection("chats").UpdateOne(context.Background(),
@@ -639,35 +591,35 @@ func completeOrder(token, driverID, orderIDHex string) {
         log.Printf("✅ Чат для заказа %s закрыт", orderIDHex[:8])
     }()
 
-    sendMessage(token, driverID, "✅ Заказ завершён! Спасибо за работу.")
+    utils.SendMessage(token, driverID, "✅ Заказ завершён! Спасибо за работу.")
 }
 
 func routeOrder(token, driverID, orderIDHex string) {
-    var order Order
+    var order models.Order
     collection := db.Collection("orders")
     err := collection.FindOne(context.Background(), bson.M{"_id": orderIDHex}).Decode(&order)
     if err != nil {
-        sendMessage(token, driverID, "❌ Заказ не найден")
+        utils.SendMessage(token, driverID, "❌ Заказ не найден")
         return
     }
     if order.FromLat != 0 && order.FromLon != 0 {
         mapLink := fmt.Sprintf("https://yandex.ru/maps/?rtext=~%f,%f", order.FromLat, order.FromLon)
-        sendMessage(token, driverID, fmt.Sprintf("🗺️ Маршрут до точки забора:\n%s", mapLink))
+        utils.SendMessage(token, driverID, fmt.Sprintf("🗺️ Маршрут до точки забора:\n%s", mapLink))
     } else {
-        sendMessage(token, driverID, fmt.Sprintf("📍 Адрес забора: %s\nПостройте маршрут самостоятельно", order.FromAddress))
+        utils.SendMessage(token, driverID, fmt.Sprintf("📍 Адрес забора: %s\nПостройте маршрут самостоятельно", order.FromAddress))
     }
 }
 
-func routeToDelivery(token string, order Order) {
+func routeToDelivery(token string, order models.Order) {
     if order.ToLat != 0 && order.ToLon != 0 {
         mapLink := fmt.Sprintf("https://yandex.ru/maps/?rtext=~%f,%f", order.ToLat, order.ToLon)
-        sendMessage(token, order.DriverID, fmt.Sprintf("🗺️ Маршрут до точки доставки:\n%s", mapLink))
+        utils.SendMessage(token, order.DriverID, fmt.Sprintf("🗺️ Маршрут до точки доставки:\n%s", mapLink))
     } else {
-        sendMessage(token, order.DriverID, fmt.Sprintf("📍 Адрес доставки: %s\nПостройте маршрут самостоятельно", order.ToAddress))
+        utils.SendMessage(token, order.DriverID, fmt.Sprintf("📍 Адрес доставки: %s\nПостройте маршрут самостоятельно", order.ToAddress))
     }
 }
 
-func sendOrderStatusToDriver(token string, order Order) {
+func sendOrderStatusToDriver(token string, order models.Order) {
     var buttons [][]map[string]interface{}
     switch order.Status {
     case "accepted":
@@ -705,39 +657,5 @@ func sendOrderStatusToDriver(token string, order Order) {
     text := fmt.Sprintf("✅ Заказ #%s\n📅 %s\n📍 %s → %s\n💰 %.0f ₽\n📌 Статус: %s",
         order.ID[:8], timeStr, order.FromAddress, order.ToAddress, order.Price, order.Status)
 
-    sendMessageWithButtons(token, order.DriverID, text, buttons)
-}
-
-func sendMessage(token, chatID, text string) {
-    sendMaxMessage(token, chatID, text)
-}
-
-func sendMaxMessage(token, chatID, text string) {
-    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
-    payload := map[string]interface{}{"text": text}
-    jsonData, _ := json.Marshal(payload)
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", token)
-    http.DefaultClient.Do(req)
-}
-
-func sendMessageWithButtons(token, chatID, text string, buttons [][]map[string]interface{}) {
-    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
-    payload := map[string]interface{}{
-        "text": text,
-        "attachments": []map[string]interface{}{
-            {
-                "type": "inline_keyboard",
-                "payload": map[string]interface{}{
-                    "buttons": buttons,
-                },
-            },
-        },
-    }
-    jsonData, _ := json.Marshal(payload)
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", token)
-    http.DefaultClient.Do(req)
+    utils.SendMessageWithButtons(token, order.DriverID, text, buttons)
 }
