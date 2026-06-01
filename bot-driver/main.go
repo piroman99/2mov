@@ -10,41 +10,21 @@ import (
     "net/http"
     "os"
     "os/signal"
-//    "strconv"
     "strings"
     "syscall"
     "time"
 
-    "github.com/eclipse/paho.mqtt.golang"
+    mqttlib "github.com/eclipse/paho.mqtt.golang"
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
-    "2mov-bot-driver/internal/models"
-    "2mov-bot-driver/internal/utils"
     "2mov-bot-driver/internal/handlers"
+    "2mov-bot-driver/internal/models"
+    "2mov-bot-driver/internal/mymqtt"
+    "2mov-bot-driver/internal/utils"
 )
 
 var db *mongo.Database
-var mqttClient mqtt.Client
-
-func initMQTT() {
-    broker := os.Getenv("MQTT_BROKER")
-    if broker == "" {
-        broker = "tcp://62.181.53.145:1883"
-    }
-    opts := mqtt.NewClientOptions()
-    opts.AddBroker(broker)
-    opts.SetClientID("2mov_driver")
-    opts.SetCleanSession(true)
-    opts.SetAutoReconnect(true)
-
-    mqttClient = mqtt.NewClient(opts)
-    if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
-        log.Printf("⚠️ MQTT connect error: %v", token.Error())
-        return
-    }
-    log.Println("✅ MQTT connected")
-}
 
 func main() {
     token := os.Getenv("MAX_BOT_TOKEN")
@@ -63,7 +43,21 @@ func main() {
     db = mongoClient.Database("2mov")
     log.Println("✅ Подключение к MongoDB установлено")
 
-    initMQTT()
+    // Инициализация MQTT
+    mymqtt.Init()
+
+    // Подписка на входящие сообщения от клиентов
+    if mymqtt.IsConnected() {
+        mymqtt.Client.Subscribe("chat/+", 1, func(client mqttlib.Client, msg mqttlib.Message) {
+            parts := strings.Split(msg.Topic(), "/")
+            if len(parts) == 2 {
+                driverID := parts[1]
+                log.Printf("📡 MQTT received for driver %s: %s", driverID, msg.Payload())
+                utils.SendMessage(token, driverID, string(msg.Payload()))
+            }
+        })
+        log.Println("✅ MQTT driver subscribed to chat/+")
+    }
 
     // Установка подсказок команд
     go func() {
@@ -236,9 +230,9 @@ func main() {
             }
             db.Collection("chat_messages").InsertOne(context.Background(), msg)
 
-            if mqttClient != nil && mqttClient.IsConnected() {
+            if mymqtt.IsConnected() {
                 topic := "chat/" + recipient
-                mqttClient.Publish(topic, 1, false, fullText)
+                mymqtt.Publish(topic, 1, false, fullText)
                 log.Printf("📡 MQTT publish to %s: %s", topic, fullText)
             }
 
@@ -256,13 +250,11 @@ func main() {
             utils.SendMessage(token, userIDStr, "🚕 Водительский бот 2MOV готов!\n/help — список команд")
         case "/help":
             utils.SendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/help — справка\n/orders — список заказов\n/myorders — мои заказы")
-       case "/orders":
+        case "/orders":
             handlers.HandleOrders(token, userIDStr, db)
-       case "/myorders":
-            handlers.HandleMyOrders(token, userIDStr, db) 
-
-
-       default:
+        case "/myorders":
+            handlers.HandleMyOrders(token, userIDStr, db)
+        default:
             if msg, ok := update["message"].(map[string]interface{}); ok {
                 if body, ok := msg["body"].(map[string]interface{}); ok {
                     if attachments, ok := body["attachments"].([]interface{}); ok {
@@ -337,9 +329,9 @@ func acceptOrder(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    if mqttClient != nil && mqttClient.IsConnected() {
+    if mymqtt.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
-        mqttClient.Publish(topic, 1, false, "accepted")
+        mymqtt.Publish(topic, 1, false, "accepted")
         log.Printf("📡 MQTT publish status to %s: accepted", topic)
     }
 
@@ -385,9 +377,9 @@ func cancelOrderByDriver(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    if mqttClient != nil && mqttClient.IsConnected() {
+    if mymqtt.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
-        mqttClient.Publish(topic, 1, false, "pending")
+        mymqtt.Publish(topic, 1, false, "pending")
         log.Printf("📡 MQTT publish status to %s: pending", topic)
     }
 
@@ -417,9 +409,9 @@ func updateOrderStatus(token, orderID, status, notificationText string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    if mqttClient != nil && mqttClient.IsConnected() {
+    if mymqtt.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
-        mqttClient.Publish(topic, 1, false, status)
+        mymqtt.Publish(topic, 1, false, status)
         log.Printf("📡 MQTT publish status to %s: %s", topic, status)
     }
 
@@ -454,9 +446,9 @@ func completeOrder(token, driverID, orderIDHex string) {
     }
     db.Collection("chat_messages").InsertOne(context.Background(), clientMsg)
 
-    if mqttClient != nil && mqttClient.IsConnected() {
+    if mymqtt.IsConnected() {
         topic := fmt.Sprintf("status/%s", order.ClientID)
-        mqttClient.Publish(topic, 1, false, "completed")
+        mymqtt.Publish(topic, 1, false, "completed")
         log.Printf("📡 MQTT publish status to %s: completed", topic)
     }
 

@@ -1,12 +1,10 @@
-package mqtt
+package mymqtt
 
 import (
     "log"
     "os"
-    "strings"
 
     mqtt "github.com/eclipse/paho.mqtt.golang"
-    "2mov-bot-driver/internal/utils"
 )
 
 var Client mqtt.Client
@@ -30,17 +28,12 @@ func Init() {
     log.Println("✅ MQTT connected")
 }
 
-func SubscribeToChat(token string) {
-    if Client == nil || !Client.IsConnected() {
-        return
+func IsConnected() bool {
+    return Client != nil && Client.IsConnected()
+}
+
+func Publish(topic string, qos byte, retained bool, payload interface{}) {
+    if Client != nil && Client.IsConnected() {
+        Client.Publish(topic, qos, retained, payload)
     }
-    Client.Subscribe("chat/+", 1, func(c mqtt.Client, m mqtt.Message) {
-        parts := strings.Split(m.Topic(), "/")
-        if len(parts) == 2 {
-            driverID := parts[1]
-            log.Printf("📡 MQTT received for driver %s: %s", driverID, m.Payload())
-            utils.SendMessage(token, driverID, string(m.Payload()))
-        }
-    })
-    log.Println("✅ MQTT driver subscribed to chat/+")
 }
