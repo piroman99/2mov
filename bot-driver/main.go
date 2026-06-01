@@ -10,7 +10,7 @@ import (
     "net/http"
     "os"
     "os/signal"
-    "strconv"
+//    "strconv"
     "strings"
     "syscall"
     "time"
@@ -21,6 +21,7 @@ import (
     "go.mongodb.org/mongo-driver/mongo/options"
     "2mov-bot-driver/internal/models"
     "2mov-bot-driver/internal/utils"
+    "2mov-bot-driver/internal/handlers"
 )
 
 var db *mongo.Database
@@ -254,138 +255,14 @@ func main() {
         case "/start":
             utils.SendMessage(token, userIDStr, "🚕 Водительский бот 2MOV готов!\n/help — список команд")
         case "/help":
-            utils.SendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/orders — список заказов\n/myorders — мои заказы")
-        case "/orders":
-            collection := db.Collection("orders")
-            filter := bson.M{"status": "pending"}
-            cursor, err := collection.Find(context.Background(), filter)
-            if err != nil {
-                utils.SendMessage(token, userIDStr, "❌ Ошибка получения заказов")
-                break
-            }
-            var orders []models.Order
-            cursor.All(context.Background(), &orders)
-            if len(orders) == 0 {
-                utils.SendMessage(token, userIDStr, "📭 Нет активных заказов")
-                break
-            }
-            for _, o := range orders {
-                var client struct {
-                    FirstName  string  `bson:"first_name"`
-                    LastName   string  `bson:"last_name"`
-                    Rating     float64 `bson:"rating"`
-                    TripsCount int     `bson:"trips_count"`
-                }
-                usersCollection := db.Collection("users")
-                clientIDint, _ := strconv.Atoi(o.ClientID)
-                usersCollection.FindOne(context.Background(), bson.M{"max_user_id": clientIDint}).Decode(&client)
+            utils.SendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/help — справка\n/orders — список заказов\n/myorders — мои заказы")
+       case "/orders":
+            handlers.HandleOrders(token, userIDStr, db)
+       case "/myorders":
+            handlers.HandleMyOrders(token, userIDStr, db) 
 
-                clientName := fmt.Sprintf("Клиент #%s", o.ClientID)
-                if client.FirstName != "" {
-                    lastNameInitial := ""
-                    if len(client.LastName) > 0 {
-                        lastNameInitial = string([]rune(client.LastName)[0]) + "."
-                    }
-                    clientName = fmt.Sprintf("%s %s", client.FirstName, lastNameInitial)
-                }
 
-                moscowTime := o.CreatedAt.Add(3 * time.Hour)
-                timeStr := moscowTime.Format("02.01 15:04")
-
-                reply := fmt.Sprintf("🔹 Заказ #%s\n📅 %s\n👤 %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d\n📍 %s → %s\n💰 %.0f ₽",
-                    o.ID[:8],
-                    timeStr,
-                    clientName,
-                    client.Rating,
-                    client.TripsCount,
-                    o.FromAddress,
-                    o.ToAddress,
-                    o.Price,
-                )
-                buttons := [][]map[string]interface{}{
-                    {
-                        {
-                            "type": "callback",
-                            "text": "✅ Принять",
-                            "payload": fmt.Sprintf("accept_%s", o.ID),
-                        },
-                        {
-                            "type": "callback",
-                            "text": "🗺️ Маршрут",
-                            "payload": fmt.Sprintf("route_%s", o.ID),
-                        },
-                    },
-                }
-                utils.SendMessageWithButtons(token, userIDStr, reply, buttons)
-            }
-        case "/myorders":
-            collection := db.Collection("orders")
-            filter := bson.M{"driver_id": userIDStr, "$or": []bson.M{
-                {"status": "accepted"},
-                {"status": "at_pickup"},
-                {"status": "to_delivery"},
-                {"status": "at_delivery"},
-            }}
-            cursor, err := collection.Find(context.Background(), filter)
-            if err != nil {
-                utils.SendMessage(token, userIDStr, "❌ Ошибка получения заказов")
-                break
-            }
-            var orders []models.Order
-            cursor.All(context.Background(), &orders)
-            if len(orders) == 0 {
-                utils.SendMessage(token, userIDStr, "📭 Нет принятых заказов")
-                break
-            }
-            for _, o := range orders {
-                moscowTime := o.CreatedAt.Add(3 * time.Hour)
-                timeStr := moscowTime.Format("02.01 15:04")
-
-                reply := fmt.Sprintf("✅ Заказ #%s\n📅 %s\n📍 %s → %s\n💰 %.0f ₽\n📌 Статус: %s",
-                    o.ID[:8],
-                    timeStr,
-                    o.FromAddress,
-                    o.ToAddress,
-                    o.Price,
-                    o.Status,
-                )
-
-                var buttons [][]map[string]interface{}
-                switch o.Status {
-                case "accepted":
-                    buttons = [][]map[string]interface{}{
-                        {
-                            {"type": "callback", "text": "📍 Прибыл на забор", "payload": fmt.Sprintf("pickup_%s", o.ID)},
-                            {"type": "callback", "text": "❌ Отменить заказ", "payload": fmt.Sprintf("cancel_%s", o.ID)},
-                        },
-                    }
-                case "at_pickup":
-                    buttons = [][]map[string]interface{}{
-                        {
-                            {"type": "callback", "text": "🚚 Выехал на доставку", "payload": fmt.Sprintf("depart_%s", o.ID)},
-                            {"type": "callback", "text": "❌ Отменить заказ", "payload": fmt.Sprintf("cancel_%s", o.ID)},
-                        },
-                    }
-                case "to_delivery":
-                    buttons = [][]map[string]interface{}{
-                        {
-                            {"type": "callback", "text": "📍 Прибыл на доставку", "payload": fmt.Sprintf("deliver_%s", o.ID)},
-                        },
-                    }
-                case "at_delivery":
-                    buttons = [][]map[string]interface{}{
-                        {
-                            {"type": "callback", "text": "✅ Завершить", "payload": fmt.Sprintf("complete_%s", o.ID)},
-                        },
-                    }
-                }
-                // Добавляем маршрут
-                buttons = append(buttons, []map[string]interface{}{
-                    {"type": "callback", "text": "🗺️ Маршрут", "payload": fmt.Sprintf("route_%s", o.ID)},
-                })
-                utils.SendMessageWithButtons(token, userIDStr, reply, buttons)
-            }
-        default:
+       default:
             if msg, ok := update["message"].(map[string]interface{}); ok {
                 if body, ok := msg["body"].(map[string]interface{}); ok {
                     if attachments, ok := body["attachments"].([]interface{}); ok {
