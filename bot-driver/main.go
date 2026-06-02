@@ -1,5 +1,4 @@
 package main
-
 import (
     "bytes"
     "context"
@@ -12,7 +11,6 @@ import (
     "os/signal"
     "strings"
     "syscall"
-    "time"
 
     mqttlib "github.com/eclipse/paho.mqtt.golang"
     "go.mongodb.org/mongo-driver/bson"
@@ -59,24 +57,10 @@ func main() {
         log.Println("✅ MQTT driver subscribed to chat/+")
     }
 
+
     // Установка подсказок команд
-    go func() {
-        commands := `{"commands":[
-            {"name":"start","description":"Регистрация и приветствие"},
-            {"name":"help","description":"Справка по командам"},
-            {"name":"orders","description":"Список доступных заказов"},
-            {"name":"myorders","description":"Мои активные заказы"}
-        ]}`
-        req, _ := http.NewRequest("PATCH", "https://platform-api.max.ru/me", bytes.NewBufferString(commands))
-        req.Header.Set("Authorization", token)
-        req.Header.Set("Content-Type", "application/json")
-        if resp, err := http.DefaultClient.Do(req); err == nil {
-            defer resp.Body.Close()
-            log.Printf("✅ Подсказки команд установлены (status=%d)", resp.StatusCode)
-        } else {
-            log.Printf("⚠️ Не удалось установить подсказки: %v", err)
-        }
-    }()
+    go handlers.SetCommands(token)
+
 
     http.HandleFunc("/webhookd", func(w http.ResponseWriter, r *http.Request) {
         body, _ := io.ReadAll(r.Body)
@@ -173,73 +157,15 @@ func main() {
 
         userIDStr := fmt.Sprintf("%d", userID)
 
-        // Обработка текстового сообщения (чат) — с выбором активного заказа
-        if text != "" && !strings.HasPrefix(text, "/") {
-            // Находим все активные заказы водителя
-            var activeOrders []models.Order
-            cursor, err := db.Collection("orders").Find(context.Background(),
-                bson.M{
-                    "driver_id": userIDStr,
-                    "status":    bson.M{"$in": []string{"accepted", "at_pickup", "to_delivery", "at_delivery"}},
-                })
-            if err != nil {
-                utils.SendMessage(token, userIDStr, "❌ Ошибка получения заказов")
-                w.WriteHeader(http.StatusOK)
-                return
-            }
-            cursor.All(context.Background(), &activeOrders)
 
-            if len(activeOrders) == 0 {
-                utils.SendMessage(token, userIDStr, "❌ Нет активных заказов")
-                w.WriteHeader(http.StatusOK)
-                return
-            }
-
-            var recipient string
-            var orderID string
-
-            if len(activeOrders) == 1 {
-                orderID = activeOrders[0].ID
-                recipient = activeOrders[0].ClientID
-            } else {
-                var buttons [][]map[string]interface{}
-                for _, order := range activeOrders {
-                    btnText := fmt.Sprintf("Заказ #%s: %s → %s", order.ID[:8], order.FromAddress, order.ToAddress)
-                    buttons = append(buttons, []map[string]interface{}{
-                        {
-                            "type":    "callback",
-                            "text":    btnText,
-                            "payload": fmt.Sprintf("send_%s", order.ID),
-                        },
-                    })
-                }
-                utils.SendMessageWithButtons(token, userIDStr, "Выберите заказ для отправки сообщения:", buttons)
-                w.WriteHeader(http.StatusOK)
-                return
-            }
-
-            fullText := fmt.Sprintf("🚕 Водитель: %s", text)
-
-            msg := bson.M{
-                "order_id":   orderID,
-                "from_user":  "driver_" + userIDStr,
-                "to_user":    "client_" + recipient,
-                "text":       fullText,
-                "status":     "pending",
-                "created_at": time.Now(),
-            }
-            db.Collection("chat_messages").InsertOne(context.Background(), msg)
-
-            if mymqtt.IsConnected() {
-                topic := "chat/" + recipient
-                mymqtt.Publish(topic, 1, false, fullText)
-                log.Printf("📡 MQTT publish to %s: %s", topic, fullText)
-            }
-
-            utils.SendMessage(token, userIDStr, "✅ Сообщение отправлено")
+    // Обработка текстового сообщения (чат)
+    if text != "" && !strings.HasPrefix(text, "/") {
+        if handlers.HandleChatMessage(token, userIDStr, text, db) {
             w.WriteHeader(http.StatusOK)
             return
         }
+    }
+
 
         // Обычные команды
         parts := strings.Split(text, " ")
@@ -263,19 +189,19 @@ func main() {
                                 if attMap["type"] == "location" {
                                     lat := attMap["latitude"].(float64)
                                     lon := attMap["longitude"].(float64)
-                                    utils.SendMessage(token, userIDStr, fmt.Sprintf("📍 https://yandex.ru/maps/?pt=%f,%f&z=15", lon, lat))
+                                    handlers.HandleLocation(token, userIDStr, lat, lon)
                                 }
                                 if attMap["type"] == "contact" {
                                     firstName, _ := attMap["first_name"].(string)
                                     lastName, _ := attMap["last_name"].(string)
                                     phone, _ := attMap["phone_number"].(string)
-                                    utils.SendMessage(token, userIDStr, fmt.Sprintf("📱 %s %s\n%s", firstName, lastName, phone))
+                                    handlers.HandleContact(token, userIDStr, firstName, lastName, phone)
                                 }
                             }
                         }
                     }
                 }
-            }
+            } 
         }
 
         w.WriteHeader(http.StatusOK)

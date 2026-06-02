@@ -5,6 +5,9 @@ import (
     "fmt"
     "strconv"
     "time"
+    "bytes"
+    "log"
+    "net/http"
 
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
@@ -136,5 +139,25 @@ func HandleMyOrders(token, userIDStr string, db *mongo.Database) {
             {"type": "callback", "text": "🗺️ Маршрут", "payload": fmt.Sprintf("route_%s", o.ID)},
         })
         utils.SendMessageWithButtons(token, userIDStr, reply, buttons)
+    }
+}
+
+// SetCommands устанавливает подсказки команд для водительского бота
+func SetCommands(token string) {
+    commands := `{"commands":[
+        {"name":"start","description":"Регистрация и приветствие"},
+        {"name":"help","description":"Справка по командам"},
+        {"name":"orders","description":"Список доступных заказов"},
+        {"name":"myorders","description":"Мои активные заказы"}
+    ]}`
+    req, _ := http.NewRequest("PATCH", "https://platform-api.max.ru/me", bytes.NewBufferString(commands))
+    req.Header.Set("Authorization", token)
+    req.Header.Set("Content-Type", "application/json")
+    client := &http.Client{}
+    if resp, err := client.Do(req); err == nil {
+        defer resp.Body.Close()
+        log.Printf("✅ Подсказки команд установлены (status=%d)", resp.StatusCode)
+    } else {
+        log.Printf("⚠️ Не удалось установить подсказки: %v", err)
     }
 }
