@@ -173,9 +173,9 @@ func main() {
 
         switch command {
         case "/start":
-            utils.SendMessage(token, userIDStr, "🚕 Водительский бот 2MOV готов!\n/help — список команд")
+            handlers.HandleStart(token, userIDStr, "")
         case "/help":
-            utils.SendMessage(token, userIDStr, "📋 Команды:\n/start — приветствие\n/help — справка\n/orders — список заказов\n/myorders — мои заказы")
+            handlers.HandleHelp(token, userIDStr)
         case "/orders":
             handlers.HandleOrders(token, userIDStr, db)
         case "/myorders":

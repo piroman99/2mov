@@ -13,6 +13,7 @@ import (
     "go.mongodb.org/mongo-driver/mongo"
     "2mov-bot-driver/internal/models"
     "2mov-bot-driver/internal/utils"
+    "2mov-bot-driver/internal/constants"
 )
 
 func HandleOrders(token, userIDStr string, db *mongo.Database) {
@@ -160,4 +161,18 @@ func SetCommands(token string) {
     } else {
         log.Printf("⚠️ Не удалось установить подсказки: %v", err)
     }
+}
+
+
+func HandleStart(token, userID, firstName string) {
+    if firstName == "" {
+        firstName = "водитель"
+    }
+    text := constants.TestModeNotice + fmt.Sprintf("🚕 Водительский бот 2MOV готов, %s!\n/help — список команд%s", firstName, constants.HelpFooter)
+    utils.SendMessage(token, userID, text)
+}
+
+func HandleHelp(token, userID string) {
+    text := constants.TestModeNotice + "📋 Команды:\n/start — приветствие\n/help — справка\n/orders — список заказов\n/myorders — мои заказы" + constants.HelpFooter
+    utils.SendMessage(token, userID, text)
 }
