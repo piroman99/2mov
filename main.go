@@ -18,6 +18,8 @@ import (
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
+    "2mov/internal/constants"
+    "2mov/internal/utils"
 )
 
 // Структуры
@@ -178,7 +180,7 @@ func main() {
                 userID := parts[1]
                 tgChatID, err := strconv.ParseInt(userID, 10, 64)
                 if err == nil {
-                    sendMessage(bot, tgChatID, string(m.Payload()))
+                    utils.SendMessage(bot, tgChatID, string(m.Payload()))
                 }
             }
         })
@@ -193,7 +195,7 @@ func main() {
                     status := string(m.Payload())
                     text := getStatusText(status)
                     if text != "" {
-                        sendMessage(bot, tgChatID, text)
+                        utils.SendMessage(bot, tgChatID, text)
                     }
                 }
             }
@@ -252,26 +254,24 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
     switch text {
     case "/start":
-        reply := fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", msg.From.FirstName, user.Rating)
-        log.Printf("⏱️ [%d] Вызов sendMessage для /start", msg.From.ID)
-        sendMessage(bot, msg.Chat.ID, reply)
-        log.Printf("⏱️ [%d] Команда /start обработана за %v", msg.From.ID, time.Since(startTime))
+        reply := constants.TestModeNotice + fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", msg.From.FirstName, user.Rating) + constants.HelpFooter
+        utils.SendMessage(bot, msg.Chat.ID, reply)
     case "/help":
-        reply := "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ"
-        sendMessage(bot, msg.Chat.ID, reply)
+        reply := constants.TestModeNotice + "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ" + constants.HelpFooter
+        utils.SendMessage(bot, msg.Chat.ID, reply)
     case "/profile":
         reply := fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d", user.FirstName, user.LastName, user.Rating, user.TripsCount)
-        sendMessage(bot, msg.Chat.ID, reply)
+        utils.SendMessage(bot, msg.Chat.ID, reply)
     case "/order":
         session := Session{UserID: userID, Step: "from", UpdatedAt: time.Now()}
         saveSession(session)
-        sendMessage(bot, msg.Chat.ID, "📍 Отправьте точку отправления (адрес или геолокацию)")
+        utils.SendMessage(bot, msg.Chat.ID, "📍 Отправьте точку отправления (адрес или геолокацию)")
     default:
         session, err := getSession(userID)
         if err == nil {
             handleOrderCreation(bot, msg, &session)
         } else {
-            sendMessage(bot, msg.Chat.ID, "❓ Неизвестная команда. Отправьте /help")
+            utils.SendMessage(bot, msg.Chat.ID, "❓ Неизвестная команда. Отправьте /help")
         }
     }
 }
@@ -300,11 +300,11 @@ func handleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
             }
             saveOrder(order)
             deleteSession(userID)
-            sendMessage(bot, query.Message.Chat.ID, "✅ Заказ создан! Водитель будет найден.")
+            utils.SendMessage(bot, query.Message.Chat.ID, "✅ Заказ создан! Водитель будет найден.")
         }
     } else if strings.HasPrefix(data, "cancel_") {
         deleteSession(userID)
-        sendMessage(bot, query.Message.Chat.ID, "❌ Заказ отменён")
+        utils.SendMessage(bot, query.Message.Chat.ID, "❌ Заказ отменён")
     }
 
     callback := tgbotapi.NewCallback(query.ID, "✅")
@@ -321,12 +321,12 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
         } else if msg.Text != "" {
             session.FromAddress = msg.Text
         } else {
-            sendMessage(bot, msg.Chat.ID, "❌ Отправьте адрес или геолокацию")
+            utils.SendMessage(bot, msg.Chat.ID, "❌ Отправьте адрес или геолокацию")
             return
         }
         session.Step = "to"
         saveSession(*session)
-        sendMessage(bot, msg.Chat.ID, "📍 Отправьте точку назначения (адрес или геолокацию)")
+        utils.SendMessage(bot, msg.Chat.ID, "📍 Отправьте точку назначения (адрес или геолокацию)")
     case "to":
         if msg.Location != nil {
             session.ToLat = msg.Location.Latitude
@@ -335,7 +335,7 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
         } else if msg.Text != "" {
             session.ToAddress = msg.Text
         } else {
-            sendMessage(bot, msg.Chat.ID, "❌ Отправьте адрес или геолокацию")
+            utils.SendMessage(bot, msg.Chat.ID, "❌ Отправьте адрес или геолокацию")
             return
         }
         session.Step = "confirm"
@@ -351,7 +351,7 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
         newMsg.ReplyMarkup = buttons
         bot.Send(newMsg)
     default:
-        sendMessage(bot, msg.Chat.ID, "❓ Отправьте /order для нового заказа")
+        utils.SendMessage(bot, msg.Chat.ID, "❓ Отправьте /order для нового заказа")
     }
 }
 
@@ -414,9 +414,10 @@ func saveOrder(order Order) error {
     return err
 }
 
-func sendMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
+/*func sendMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
     start := time.Now()
     msg := tgbotapi.NewMessage(chatID, text)
     _, err := bot.Send(msg)
     log.Printf("⏱️ sendMessage to %d занял %v (error: %v)", chatID, time.Since(start), err)
 }
+*/
