@@ -51,14 +51,14 @@ cleansession true
 
 ```bash
 # Прослушивание всех топиков
-`mosquitto_sub -h localhost -t "#" -v`
+mosquitto_sub -h localhost -t "#" -v
 
 # Прослушивание статусов
-`mosquitto_sub -h localhost -t "status/+" -v`
+mosquitto_sub -h localhost -t "status/+" -v
 
 # Прослушивание чата
-`mosquitto_sub -h localhost -t "chat/+" -v`
-
+mosquitto_sub -h localhost -t "chat/+" -v
+```
 
 ### Зависимости
 
