@@ -21,6 +21,8 @@ import (
     "go.mongodb.org/mongo-driver/bson/primitive"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
+    "2mov/internal/constants"
+    "2mov/internal/utils"
 )
 
 type User struct {
@@ -205,36 +207,6 @@ func parseLocation(update map[string]interface{}) (address string, lat, lon floa
     return "", 0, 0, fmt.Errorf("no location")
 }
 
-func sendMaxMessage(token, chatID, text string) {
-    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
-    payload := map[string]interface{}{"text": text}
-    jsonData, _ := json.Marshal(payload)
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", token)
-    http.DefaultClient.Do(req)
-}
-
-func sendMaxMessageWithButtons(token, chatID, text string, buttons [][]map[string]interface{}) {
-    url := fmt.Sprintf("https://platform-api.max.ru/messages?user_id=%s", chatID)
-    payload := map[string]interface{}{
-        "text": text,
-        "attachments": []map[string]interface{}{
-            {
-                "type": "inline_keyboard",
-                "payload": map[string]interface{}{
-                    "buttons": buttons,
-                },
-            },
-        },
-    }
-    jsonData, _ := json.Marshal(payload)
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", token)
-    http.DefaultClient.Do(req)
-}
-
 func sendCallbackAnswer(token, callbackID, notification, newText string, updateMessage bool) {
     url := fmt.Sprintf("https://platform-api.max.ru/answers?callback_id=%s", callbackID)
     answerBody := map[string]interface{}{
@@ -257,14 +229,14 @@ func cancelOrderByClient(token, clientID string) {
     var order Order
     err := collection.FindOne(context.Background(), bson.M{"client_id": clientID, "status": "pending"}).Decode(&order)
     if err != nil {
-        sendMaxMessage(token, clientID, "❌ Нет активных заказов для отмены")
+        utils.SendMessage(token, clientID, "❌ Нет активных заказов для отмены")
         return
     }
 
     update := bson.M{"$set": bson.M{"status": "cancelled", "cancelled_by": "client", "cancelled_at": time.Now()}}
     collection.UpdateOne(context.Background(), bson.M{"_id": order.ID}, update)
 
-    sendMaxMessage(token, clientID, "❌ Заказ отменён")
+    utils.SendMessage(token, clientID, "❌ Заказ отменён")
 }
 
 func main() {
@@ -334,7 +306,7 @@ func runMaxBot() {
                 status := string(m.Payload())
                 text := getStatusText(status)
                 if text != "" {
-                    sendMaxMessage(token, clientID, text)
+                    utils.SendMessage(token, clientID, text)
                 }
             }
         })
@@ -500,7 +472,7 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
                         },
                     },
                 }
-                sendMaxMessageWithButtons(token, userID, "✅ Заказ создан! Ищем водителя...", buttons)
+                utils.SendMessageWithButtons(token, userID, "✅ Заказ создан! Ищем водителя...", buttons)
             } else if payload == "edit_order" {
                 deleteSession(userID)
                 sendCallbackAnswer(token, callbackID, "❌ Заказ отменён", "❌ Заказ отменён. Начните заново с /order", true)
@@ -548,7 +520,7 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
             topic := "chat/" + userIDStr
             mqttClient.Subscribe(topic, 1, func(c mqtt.Client, m mqtt.Message) {
                 log.Printf("📡 MQTT received on %s: %s", topic, m.Payload())
-                sendMaxMessage(token, userIDStr, string(m.Payload()))
+                utils.SendMessage(token, userIDStr, string(m.Payload()))
             })
             log.Printf("✅ MQTT subscribed to %s", topic)
         }
@@ -578,7 +550,7 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
                     log.Printf("📡 MQTT publish to %s: %s", topic, text)
                 }
                 
-                sendMaxMessage(token, userIDStr, "✅ Сообщение отправлено водителю")
+                utils.SendMessage(token, userIDStr, "✅ Сообщение отправлено водителю")
                 w.WriteHeader(http.StatusOK)
                 return
             }
@@ -586,18 +558,18 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
 
         switch text {
         case "/start":
-            reply := fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", firstName, user.Rating)
-            sendMaxMessage(token, userIDStr, reply)
+            reply := constants.TestModeNotice + fmt.Sprintf("🚕 Добро пожаловать в 2MOV, %s!\nВаш рейтинг: %.1f\nОтправьте /help", firstName, user.Rating) + constants.HelpFooter
+            utils.SendMessage(token, userIDStr, reply)
         case "/help":
-            reply := "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ"
-            sendMaxMessage(token, userIDStr, reply)
+            reply := constants.TestModeNotice + "📋 Доступные команды:\n/start — начало\n/help — справка\n/profile — мой профиль\n/order — создать заказ" + constants.HelpFooter
+            utils.SendMessage(token, userIDStr, reply)
         case "/profile":
             reply := fmt.Sprintf("👤 %s %s\n⭐ Рейтинг: %.1f\n🚕 Поездок: %d", user.FirstName, user.LastName, user.Rating, user.TripsCount)
-            sendMaxMessage(token, userIDStr, reply)
+            utils.SendMessage(token, userIDStr, reply)
         case "/order":
             session := Session{UserID: userIDStr, Step: "from", UpdatedAt: time.Now()}
             saveSession(session)
-            sendMaxMessage(token, userIDStr, "📍 Отправьте точку отправления (геолокацию или адрес)")
+            utils.SendMessage(token, userIDStr, "📍 Отправьте точку отправления (геолокацию или адрес)")
         default:
             session, err := getSession(userIDStr)
             if err == nil {
@@ -605,7 +577,7 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
                 case "from":
                     addr, lat, lon, err := parseLocation(update)
                     if err != nil {
-                        sendMaxMessage(token, userIDStr, "Не удалось определить адрес. Попробуйте ещё раз или отправьте геолокацию.")
+                        utils.SendMessage(token, userIDStr, "Не удалось определить адрес. Попробуйте ещё раз или отправьте геолокацию.")
                         break
                     }
                     session.FromAddress = addr
@@ -613,11 +585,11 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
                     session.FromLon = lon
                     session.Step = "to"
                     saveSession(session)
-                    sendMaxMessage(token, userIDStr, "📍 Отправьте точку назначения (геолокацию или адрес)")
+                    utils.SendMessage(token, userIDStr, "📍 Отправьте точку назначения (геолокацию или адрес)")
                 case "to":
                     addr, lat, lon, err := parseLocation(update)
                     if err != nil {
-                        sendMaxMessage(token, userIDStr, "Не удалось определить адрес. Попробуйте ещё раз.")
+                        utils.SendMessage(token, userIDStr, "Не удалось определить адрес. Попробуйте ещё раз.")
                         break
                     }
                     session.ToAddress = addr
@@ -642,51 +614,19 @@ http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
                             },
                         },
                     }
-                    sendMaxMessageWithButtons(token, userIDStr, reply, buttons)
+                    utils.SendMessageWithButtons(token, userIDStr, reply, buttons)
                 default:
-                    sendMaxMessage(token, userIDStr, "Отправьте /help для списка команд")
+                    utils.SendMessage(token, userIDStr, "Отправьте /help для списка команд")
                 }
             } else {
-                sendMaxMessage(token, userIDStr, "Отправьте /help для списка команд")
+                utils.SendMessage(token, userIDStr, "Отправьте /help для списка команд")
             }
         }
 
         w.WriteHeader(http.StatusOK)
     })
 
-/*    // Фоновая проверка сообщений (оставляем для совместимости, но MQTT уже работает)
-    go func() {
-        ticker := time.NewTicker(3 * time.Second)
-        for range ticker.C {
-            var chats []struct {
-                ClientID string `bson:"client_id"`
-            }
-            cursor, err := db.Collection("chats").Find(context.Background(), bson.M{"status": "active"})
-            if err != nil {
-                continue
-            }
-            cursor.All(context.Background(), &chats)
 
-            for _, chat := range chats {
-                var messages []bson.M
-                msgCursor, err := db.Collection("chat_messages").Find(context.Background(),
-                    bson.M{"to_user": "client_" + chat.ClientID, "status": "pending"})
-                if err != nil {
-                    continue
-                }
-                msgCursor.All(context.Background(), &messages)
-
-                for _, msg := range messages {
-                    text := msg["text"].(string)
-                    sendMaxMessage(token, chat.ClientID, fmt.Sprintf("💬 %s", text))
-                    db.Collection("chat_messages").UpdateOne(context.Background(),
-                        bson.M{"_id": msg["_id"]},
-                        bson.M{"$set": bson.M{"status": "delivered", "delivered_at": time.Now()}})
-                }
-            }
-        }
-    }()
-*/
     go func() {
         log.Println("✅ HTTP-сервер запущен на :8080")
         if err := http.ListenAndServe(":8080", nil); err != nil {
