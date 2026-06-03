@@ -15,6 +15,16 @@
         .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
         h1 { font-size: 3rem; margin-bottom: 1rem; text-align: center; }
         .subtitle { text-align: center; font-size: 1.2rem; opacity: 0.9; margin-bottom: 3rem; }
+        .notice {
+            background: #ff9800;
+            color: #1a1a2e;
+            text-align: center;
+            padding: 0.75rem;
+            border-radius: 2rem;
+            max-width: 800px;
+            margin: 0 auto 2rem auto;
+            font-weight: bold;
+        }
         .features {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -51,65 +61,58 @@
             color: #fff;
             border: 2px solid #fff;
         }
-        footer { text-align: center; opacity: 0.7; font-size: 0.875rem; }
-        .chats {
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
+        footer { text-align: center; opacity: 0.7; font-size: 0.875rem; margin-top: 2rem; }
+        .license {
+            font-size: 0.75rem;
             margin-top: 1rem;
-            flex-wrap: wrap;
         }
-        .chat-link {
-            color: #fff;
-            text-decoration: none;
-            opacity: 0.8;
-        }
-        .chat-link:hover { opacity: 1; }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="notice">
+            ⚠️ В РАЗРАБОТКЕ — ПРИСОЕДИНЯЙТЕСЬ К ТЕСТИРОВАНИЮ И РАЗРАБОТКЕ ⚠️
+        </div>
+        
         <h1>🚀 2MOV</h1>
-        <div class="subtitle">Готовая платформа для запуска райдшеринга и доставки в мессенджерах</div>
+        <div class="subtitle">Платформа для запуска райдшеринга и доставки в мессенджерах</div>
         
         <div class="features">
             <div class="feature">
                 <h3>🔧 Всё готово</h3>
-                <p>Боты для MAX и Telegram. Запустите свой сервис за день.</p>
+                <p>Боты для MAX и Telegram. Запустите свой сервис.</p>
             </div>
             <div class="feature">
                 <h3>🛠️ Открытый код</h3>
-                <p>Исходники на GitFlic. Адаптируйте под свои задачи.</p>
+                <p>Исходники на GitFlic. Участвуйте в разработке.</p>
             </div>
             <div class="feature">
                 <h3>⚡ Современный стек</h3>
-                <p>Go, MQTT, MongoDB, Docker. Работает в облаке или на своём сервере.</p>
+                <p>Go, MQTT, MongoDB, Docker.</p>
             </div>
             <div class="feature">
                 <h3>💬 MAX + Telegram</h3>
-                <p>Пользователи остаются в любимых мессенджерах. Приложений не нужно.</p>
+                <p>Приложений не нужно.</p>
             </div>
             <div class="feature">
                 <h3>📦 Логика под ключ</h3>
-                <p>Заказы, статусы, чаты, отзывы, админка — всё уже реализовано.</p>
+                <p>Заказы, статусы, чаты, отзывы, админка.</p>
             </div>
             <div class="feature">
-                <h3>🚀 Масштабируется</h3>
-                <p>Готово к любым нагрузкам. Для города, региона или страны.</p>
+                <h3>✅ Белые списки</h3>
+                <p>Будет работать даже в белых списках.</p>
             </div>
         </div>
         
         <div class="buttons">
             <a href="https://gitflic.ru/project/piroman99/2mov" class="btn">🐙 Забрать код</a>
-        </div>
-        
-        <div class="chats">
-            <a href="https://max.ru/join/YaipMpUZmfNdHMHDocZu1_J-11-1Gy8MMlR9bi5tUzk" class="chat-link">💬 Чат в MAX</a>
-            <a href="https://t.me/+sqoHu2mCloFlNjcy" class="chat-link">💬 Чат в Telegram</a>
+            <a href="https://max.ru/join/YaipMpUZmfNdHMHDocZu1_J-11-1Gy8MMlR9bi5tUzk" class="btn btn-outline">💬 Чат в MAX</a>
+            <a href="https://t.me/+sqoHu2mCloFlNjcy" class="btn btn-outline">💬 Чат в Telegram</a>
         </div>
         
         <footer>
-            <p>2MOV — открытая платформа для райдшеринга и доставки.<br>Берите код, поднимайте ботов, запускайте сервис.</p>
+            <p>2MOV — открытая платформа для райдшеринга и доставки.<br>Присоединяйтесь к разработке и тестированию.</p>
+            <div class="license">© 2MOV | MIT License</div>
         </footer>
     </div>
 </body>

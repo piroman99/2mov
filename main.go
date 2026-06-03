@@ -26,6 +26,7 @@ import (
 type User struct {
     ID           string    `bson:"_id,omitempty"`
     MaxUserID    int       `bson:"max_user_id,omitempty"`
+    TelegramID   string    `bson:"telegram_id,omitempty"` 
     FirstName    string    `bson:"first_name"`
     LastName     string    `bson:"last_name"`
     Username     string    `bson:"username"`
@@ -339,59 +340,62 @@ func runMaxBot() {
         })
         log.Println("✅ MQTT status subscription added")
     }
-
-    // Админка - заказы
-    http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-        user, pass, ok := r.BasicAuth()
-        if !ok || user != adminUsername || pass != adminPassword {
-            w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
-            w.WriteHeader(http.StatusUnauthorized)
-            return
+//
+// Админка - заказы и пользователи
+http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+    user, pass, ok := r.BasicAuth()
+    if !ok || user != adminUsername || pass != adminPassword {
+        w.Header().Set("WWW-Authenticate", `Basic realm="2MOV Admin"`)
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+    
+    ordersCollection := db.Collection("orders")
+    ordersCursor, _ := ordersCollection.Find(context.Background(), bson.M{})
+    var orders []Order
+    ordersCursor.All(context.Background(), &orders)
+    
+    usersCollection := db.Collection("users")
+    usersCursor, _ := usersCollection.Find(context.Background(), bson.M{})
+    var users []User
+    usersCursor.All(context.Background(), &users)
+    
+    w.Header().Set("Content-Type", "text/html")
+    fmt.Fprintf(w, `<!DOCTYPE html>
+    <html>
+    <head><title>2MOV Admin</title><meta charset="UTF-8"></head>
+    <body style="font-family: monospace; font-size: 14px;">
+        <h1>2MOV Admin</h1>
+        <p><a href="/admin/drivers">🚕 Водители</a></p>
+        <h2>Заказы (%d)</h2>
+        <table border="1" cellpadding="5">
+            <tr><th>ID</th><th>Клиент</th><th>Водитель</th><th>Откуда</th><th>Куда</th><th>Цена</th><th>Статус</th><th>Создан</th></tr>
+    `, len(orders))
+    
+    for _, o := range orders {
+        fmt.Fprintf(w, `<tr>
+            <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.0f</td><td>%s</td><td>%s</td>
+        </tr>`, o.ID[:8], o.ClientID, o.DriverID, o.FromAddress, o.ToAddress, o.Price, o.Status, o.CreatedAt.Format("02.01 15:04"))
+    }
+    
+    fmt.Fprintf(w, `</table>
+        <h2>Пользователи (%d)</h2>
+        <table border="1" cellpadding="5">
+            <tr><th>ID</th><th>Имя</th><th>Роль</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
+    `, len(users))
+    
+    for _, u := range users {
+        userID := fmt.Sprintf("%d", u.MaxUserID)
+        if userID == "0" && u.TelegramID != "" {
+            userID = u.TelegramID
         }
-        
-        ordersCollection := db.Collection("orders")
-        ordersCursor, _ := ordersCollection.Find(context.Background(), bson.M{})
-        var orders []Order
-        ordersCursor.All(context.Background(), &orders)
-        
-        usersCollection := db.Collection("users")
-        usersCursor, _ := usersCollection.Find(context.Background(), bson.M{})
-        var users []User
-        usersCursor.All(context.Background(), &users)
-        
-        w.Header().Set("Content-Type", "text/html")
-        fmt.Fprintf(w, `<!DOCTYPE html>
-        <html>
-        <head><title>2MOV Admin</title><meta charset="UTF-8"></head>
-        <body style="font-family: monospace; font-size: 14px;">
-            <h1>2MOV Admin</h1>
-            <p><a href="/admin/drivers">🚕 Водители</a></p>
-            <h2>Заказы (%d)</h2>
-            <table border="1" cellpadding="5">
-                <tr><th>ID</th><th>Клиент</th><th>Водитель</th><th>Откуда</th><th>Куда</th><th>Цена</th><th>Статус</th><th>Создан</th></tr>
-        `, len(orders))
-        
-        for _, o := range orders {
-            fmt.Fprintf(w, `<tr>
-                <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%.0f</td><td>%s</td><td>%s</td>
-            </tr>`, o.ID[:8], o.ClientID, o.DriverID, o.FromAddress, o.ToAddress, o.Price, o.Status, o.CreatedAt.Format("02.01 15:04"))
-        }
-        
-        fmt.Fprintf(w, `</table>
-            <h2>Пользователи (%d)</h2>
-            <table border="1" cellpadding="5">
-                <tr><th>ID</th><th>Имя</th><th>Роль</th><th>Рейтинг</th><th>Поездок</th><th>Активен</th></tr>
-        `, len(users))
-        
-        for _, u := range users {
-            fmt.Fprintf(w, `<tr>
-                <tr>%d</td><td>%s %s</td><td>%s</td><td>%.1f</td><td>%d</td><td>%s</td>
-            </tr>`, u.MaxUserID, u.FirstName, u.LastName, u.Role, u.Rating, u.TripsCount, u.LastActiveAt.Format("02.01 15:04"))
-        }
-        
-        fmt.Fprintf(w, `</table></body></html>`)
-    })
-
+        fmt.Fprintf(w, `<tr>
+            <td>%s</td><td>%s %s</td><td>%s</td><td>%.1f</td><td>%d</td><td>%s</td>
+        </tr>`, userID, u.FirstName, u.LastName, u.Role, u.Rating, u.TripsCount, u.LastActiveAt.Format("02.01 15:04"))
+    }
+    
+    fmt.Fprintf(w, `</table></body></html>`)
+})
     // Админка - водители
     http.HandleFunc("/admin/drivers", func(w http.ResponseWriter, r *http.Request) {
         user, pass, ok := r.BasicAuth()
