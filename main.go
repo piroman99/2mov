@@ -286,7 +286,9 @@ func handleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
     if strings.HasPrefix(data, "confirm_") {
         session, err := getSession(userID)
         if err == nil {
-            order := Order{
+            distance := utils.SimpleDistance(session.FromLat, session.FromLon, session.ToLat, session.ToLon)
+	    price := utils.CalculatePrice(distance)
+	    order := Order{
                 ClientID:    userID,
                 FromAddress: session.FromAddress,
                 FromLat:     session.FromLat,
@@ -296,7 +298,7 @@ func handleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
                 ToLon:       session.ToLon,
                 Status:      "pending",
                 CreatedAt:   time.Now(),
-                Price:       200,
+                Price:       price,
             }
             saveOrder(order)
             deleteSession(userID)
@@ -310,7 +312,7 @@ func handleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
     callback := tgbotapi.NewCallback(query.ID, "✅")
     bot.Request(callback)
 }
-
+//
 func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *Session) {
     switch session.Step {
     case "from":
@@ -327,6 +329,7 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
         session.Step = "to"
         saveSession(*session)
         utils.SendMessage(bot, msg.Chat.ID, "📍 Отправьте точку назначения (адрес или геолокацию)")
+
     case "to":
         if msg.Location != nil {
             session.ToLat = msg.Location.Latitude
@@ -340,7 +343,12 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
         }
         session.Step = "confirm"
         saveSession(*session)
-        reply := fmt.Sprintf("🚚 Заказ:\n📍 Откуда: %s\n📍 Куда: %s\n💰 Цена: 200 ₽\n\nПодтверждаете?", session.FromAddress, session.ToAddress)
+
+        // Расчёт цены на основе координат
+        distance := utils.SimpleDistance(session.FromLat, session.FromLon, session.ToLat, session.ToLon)
+        price := utils.CalculatePrice(distance)
+
+        reply := fmt.Sprintf("🚚 Заказ:\n📍 Откуда: %s\n📍 Куда: %s\n💰 Цена: %.0f ₽\n\nПодтверждаете?", session.FromAddress, session.ToAddress, price)
         buttons := tgbotapi.NewInlineKeyboardMarkup(
             tgbotapi.NewInlineKeyboardRow(
                 tgbotapi.NewInlineKeyboardButtonData("✅ Да", "confirm_"+session.UserID),
@@ -350,10 +358,12 @@ func handleOrderCreation(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, session *S
         newMsg := tgbotapi.NewMessage(msg.Chat.ID, reply)
         newMsg.ReplyMarkup = buttons
         bot.Send(newMsg)
+
     default:
         utils.SendMessage(bot, msg.Chat.ID, "❓ Отправьте /order для нового заказа")
     }
 }
+//
 
 func findOrCreateUser(telegramID, firstName, lastName, username string) *User {
     startTime := time.Now()
@@ -414,10 +424,3 @@ func saveOrder(order Order) error {
     return err
 }
 
-/*func sendMessage(bot *tgbotapi.BotAPI, chatID int64, text string) {
-    start := time.Now()
-    msg := tgbotapi.NewMessage(chatID, text)
-    _, err := bot.Send(msg)
-    log.Printf("⏱️ sendMessage to %d занял %v (error: %v)", chatID, time.Since(start), err)
-}
-*/
