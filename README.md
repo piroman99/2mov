@@ -2,6 +2,13 @@
 
 Готовое open-source решение для запуска сервиса мобильности в мессенджерах MAX и Telegram.
 
+## 🧪 Тестовые боты
+
+| Роль | MAX | Telegram |
+|------|-----|----------|
+| 👤 Клиент | [@2mov_client_bot](https://max.ru/id771903961307_2_bot) | [@dvamovbot](https://t.me/dvamovbot) |
+| 🚕 Водитель | [@2mov_driver_bot](https://max.ru/id771903961307_3_bot) | — |
+
 ## Архитектура
 
 ```text
