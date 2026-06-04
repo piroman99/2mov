@@ -47,7 +47,8 @@ func main() {
     // Подписка на входящие сообщения от клиентов
     if mymqtt.IsConnected() {
         mymqtt.Client.Subscribe("chat/+", 1, func(client mqttlib.Client, msg mqttlib.Message) {
-            parts := strings.Split(msg.Topic(), "/")
+            log.Printf("🔁 MQTT received (count)") //  debug
+	    parts := strings.Split(msg.Topic(), "/")
             if len(parts) == 2 {
                 driverID := parts[1]
                 log.Printf("📡 MQTT received for driver %s: %s", driverID, msg.Payload())
